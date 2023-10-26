@@ -920,16 +920,13 @@ def load_from_gptq_llama(tensorrt_llm_llama,
             q_part = model_params[prefix + 'q_proj.' + suf].cpu()
             k_part = model_params[prefix + 'k_proj.' + suf].cpu()
             v_part = model_params[prefix + 'v_proj.' + suf].cpu()
-            qkv_part = torch.cat([q_part, k_part, v_part], dim=0)
-            dim = qkv_part.shape
-            qkv_part = qkv_part.reshape(3, dim[0] // 3, dim[1])
-            split_qkv = qkv_part.split(dim[1] // mapping.tp_size,
-                                       dim=2)[mapping.tp_rank]
-            split_qkv = torch.cat([
-                split_qkv[0, :, :].squeeze(0), split_qkv[1, :, :].squeeze(0),
-                split_qkv[2, :, :].squeeze(0)
-            ],
-                                  dim=1)
+            q_part = q_part.split(q_part.shape[1] // mapping.tp_size, dim=1)[
+                mapping.tp_rank]
+            k_part = k_part.split(k_part.shape[1] // mapping.tp_size, dim=1)[
+                mapping.tp_rank]
+            v_part = v_part.split(v_part.shape[1] // mapping.tp_size, dim=1)[
+                mapping.tp_rank]
+            split_qkv = torch.cat([q_part, k_part, v_part], dim=1)
             split_qkv_suf.append(split_qkv)
 
         th_qweight, th_zero, th_scale = preprocess_groupwise_weight_params(
