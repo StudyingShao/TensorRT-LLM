@@ -15,8 +15,10 @@
 import argparse
 import json
 import os
+import sys
 
 import torch
+import torch.distributed as dist
 from transformers import AutoTokenizer
 
 import tensorrt_llm
@@ -41,6 +43,18 @@ def parse_arguments():
 
 
 if __name__ == '__main__':
+
+    assert dist.is_nccl_available(), 'NCCL is unavailable!'
+
+    dist.init_process_group(backend='nccl')
+    runtime_rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    process_group_nccl = dist.ProcessGroupNCCL(None, runtime_rank, world_size)
+
+    sys.path.append(os.path.relpath("../../cpp/build/tensorrt_llm/plugins/"))
+    import libhackNCCL
+    libhackNCCL.getProcessGroupNCCL(process_group_nccl)
+
     args = parse_arguments()
     tensorrt_llm.logger.set_level(args.log_level)
 
@@ -50,15 +64,18 @@ if __name__ == '__main__':
     use_gpt_attention_plugin = config['plugin_config']['gpt_attention_plugin']
     remove_input_padding = config['plugin_config']['remove_input_padding']
     dtype = config['builder_config']['precision']
-    world_size = config['builder_config']['tensor_parallel']
-    assert world_size == tensorrt_llm.mpi_world_size(), \
-        f'Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})'
+    # world_size = config['builder_config']['tensor_parallel']
+    # assert world_size == tensorrt_llm.mpi_world_size(), \
+        # f'Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})'
+    world_size_engine = config['builder_config']['tensor_parallel']
+    assert world_size == world_size_engine, \
+        f'Engine world size ({world_size_engine}) != Runtime world size ({world_size})'
     num_heads = config['builder_config']['num_heads'] // world_size
     hidden_size = config['builder_config']['hidden_size'] // world_size
     vocab_size = config['builder_config']['vocab_size']
     num_layers = config['builder_config']['num_layers']
 
-    runtime_rank = tensorrt_llm.mpi_rank()
+    # runtime_rank = tensorrt_llm.mpi_rank()
     runtime_mapping = tensorrt_llm.Mapping(world_size,
                                            runtime_rank,
                                            tp_size=world_size)

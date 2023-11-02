@@ -21,6 +21,9 @@
 #include "tensorrt_llm/kernels/customAllReduceKernels.h"
 #include <unistd.h>
 
+#include <dlfcn.h>
+#include "nccl_inherit_utils.h"
+
 using namespace nvinfer1;
 using tensorrt_llm::plugins::AllreducePluginCreator;
 using tensorrt_llm::plugins::AllreducePlugin;
@@ -253,12 +256,12 @@ int AllreducePlugin::initialize() noexcept
         return 0;
     }
 
-    int myRank, nRanks;
-    MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
-    MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
+    // int myRank, nRanks;
+    // MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
+    // MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
-    int deviceId;
-    cudaGetDevice(&deviceId);
+    // int deviceId;
+    // cudaGetDevice(&deviceId);
 
     auto* commMap = getCommMap();
     // [] operator inserts T() if it does not exist
@@ -267,32 +270,73 @@ int AllreducePlugin::initialize() noexcept
         return 0;
     }
 
-    int groupRank = 0;
-    for (auto it = mGroup.begin(); it != mGroup.end(); ++it)
-    {
-        if (*it == myRank)
-        {
-            break;
-        }
-        ++groupRank;
+    // int groupRank = 0;
+    // for (auto it = mGroup.begin(); it != mGroup.end(); ++it)
+    // {
+    //     if (*it == myRank)
+    //     {
+    //         break;
+    //     }
+    //     ++groupRank;
+    // }
+
+    // ncclUniqueId id;
+    // if (myRank == *mGroup.begin())
+    // {
+    //     ncclGetUniqueId(&id);
+    //     for (auto it = std::next(std::begin(mGroup), 1); it != mGroup.end(); ++it)
+    //     {
+    //         MPICHECK(MPI_Send(&id, sizeof(id), MPI_BYTE, *it, 0, MPI_COMM_WORLD));
+    //     }
+    // }
+    // else
+    // {
+    //     MPI_Status status;
+    //     MPICHECK(MPI_Recv(&id, sizeof(id), MPI_BYTE, *mGroup.begin(), 0, MPI_COMM_WORLD, &status));
+    // }
+
+
+    // (*commMap)[mGroup] = nullptr;
+    // NCCLCHECK(ncclCommInitRank(&((*commMap)[mGroup]), mGroup.size(), id, groupRank));
+
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    void* so_handle = dlopen("libhackNCCL.so", RTLD_LAZY);
+    if (so_handle == nullptr) {
+        printf("Failed, dlopen error %s:%d '%s'\n", __FILE__, __LINE__, dlerror());                      \
+        exit(EXIT_FAILURE);
     }
+    HackGroupNCCL* global_hack_group_nccl_ptr = *(HackGroupNCCL**) (dlsym(so_handle, "global_hack_group_nccl_ptr"));
+
+    int myRank, nRanks;
+    myRank = global_hack_group_nccl_ptr->getRank();
+    nRanks = global_hack_group_nccl_ptr->getSize();
+
+    std::string path("./temp/cache");
+    auto store = c10::make_intrusive<::c10d::FileStore>(path, nRanks);
+
+    c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
+    std::chrono::milliseconds pgTimeout = std::chrono::milliseconds(10 * 1000);
+    opts->timeout = pgTimeout;
+
+    std::unique_ptr<::c10d::ProcessGroupNCCL> pg_ = std::unique_ptr<::c10d::ProcessGroupNCCL>(
+        new ::c10d::ProcessGroupNCCL(store, myRank, nRanks, std::move(opts)));
+    HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) (void*) pg_.get();
+    std::string key("tp_nccl_key");
 
     ncclUniqueId id;
-    if (myRank == *mGroup.begin())
-    {
+    if (myRank == 0)
         ncclGetUniqueId(&id);
-        for (auto it = std::next(std::begin(mGroup), 1); it != mGroup.end(); ++it)
-        {
-            MPICHECK(MPI_Send(&id, sizeof(id), MPI_BYTE, *it, 0, MPI_COMM_WORLD));
-        }
-    }
-    else
-    {
-        MPI_Status status;
-        MPICHECK(MPI_Recv(&id, sizeof(id), MPI_BYTE, *mGroup.begin(), 0, MPI_COMM_WORLD, &status));
-    }
+    hack_group_nccl_ptr->hack_broadcastUniqueNCCLID(&id, true, key, myRank);
+
     (*commMap)[mGroup] = nullptr;
-    NCCLCHECK(ncclCommInitRank(&((*commMap)[mGroup]), mGroup.size(), id, groupRank));
+    NCCLCHECK(ncclCommInitRank(&((*commMap)[mGroup]), nRanks, id, myRank));
+
+    if (myRank == 0)
+    {
+        remove(path.c_str());
+    }
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
 
     return 0;
 }

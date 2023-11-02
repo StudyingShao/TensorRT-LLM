@@ -328,8 +328,11 @@ class GenerationSession(object):
         self.vocab_size_padded = pad_vocab_size(self.vocab_size,
                                                 self.mapping.tp_size)
 
-        self.nccl_comm = torch.classes.FasterTransformer.NcclCommunicatorOp(
-            self.mapping.tp_size, self.mapping.pp_size, self.mapping.rank)
+        # jiangs: 
+        # Disable creating nccl communicators for pipeline parallelism
+        # It can be enabled by hacking NcclCommunicatorOp
+        # self.nccl_comm = torch.classes.FasterTransformer.NcclCommunicatorOp(
+        #     self.mapping.tp_size, self.mapping.pp_size, self.mapping.rank)
         if self.mapping.is_last_pp_rank():
             self.decoder_logits_dtype = self._tensor_dtype('logits')
             if self.decoder_logits_dtype not in [torch.float16, torch.float32]:

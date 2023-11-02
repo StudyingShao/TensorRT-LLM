@@ -227,3 +227,17 @@ python3 summarize.py --engine_dir gptneox_engine_gptq_tp2 \
                      --data_type fp16                     \
                      --check_accuracy 2>&1 | tee summary_trt_llm_gptq_tp2.log
 ```
+
+## Using torchrun to deploy tensor parallelism
+
+1. The way to build the engine(s) is the same as usual.
+2. How to run the model with `torchrun`.
+
+```bash
+# For 2-way tensor parallelism
+torchrun --nproc_per_node 2                               \
+  run.py --max_output_len=50                              \
+         --tokenizer_dir=gptneox_model                    \
+         --engine_dir=gptneox_engine_tp2                  \
+         2>&1 | tee run_gptq_tp2.log
+```
