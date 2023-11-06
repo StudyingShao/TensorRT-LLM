@@ -351,6 +351,9 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor logits, int64_t step, int64_t max
         beam_hyps_log_probs_opt, beam_hyps_min_normed_scores_opt, beam_hyps_num_beams_opt, beam_hyps_is_done_opt,
         use_beam_hyps);
 
+    // can't stop
+    should_stop = torch::zeros({1}, torch::dtype(torch::kBool).requires_grad(false));
+
     return should_stop;
 }
 

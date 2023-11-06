@@ -22,6 +22,7 @@ import torch
 from transformers import LlamaTokenizer
 
 import tensorrt_llm
+import tensorrt_llm.profiler as profiler
 from tensorrt_llm.quantization import QuantMode
 from tensorrt_llm.runtime import ModelConfig, SamplingConfig
 
@@ -189,10 +190,17 @@ def parse_arguments():
                         type=int,
                         help="How often to return tokens when streaming.",
                         default=5)
+
+    #--------------------------------------------------------------------
+    parser.add_argument('--input_len', type=int, required=True)
+    parser.add_argument('--batch_size', type=int, required=True)
+    #--------------------------------------------------------------------
     return parser.parse_args()
 
 
 def generate(
+    input_len: int,
+    batch_size: int,
     max_output_len: int,
     log_level: str = 'error',
     engine_dir: str = 'llama_outputs',
@@ -238,18 +246,41 @@ def generate(
     if runtime_rank == 0:
         print(f"Running the {dtype} engine ...")
 
-    input_ids, input_lengths = parse_input(input_text, input_file, tokenizer,
-                                           EOS_TOKEN,
-                                           model_config.remove_input_padding)
+    # input_ids, input_lengths = parse_input(input_text, input_file, tokenizer,
+    #                                        EOS_TOKEN,
+    #                                        model_config.remove_input_padding)
+
+    input_ids = np.random.randint(0, 1000, (args.input_len * args.batch_size, ))
+    input_ids = torch.tensor(input_ids, dtype=torch.int32,
+                                 device='cuda').unsqueeze(0)
+    input_lengths = torch.ones(args.batch_size, dtype=torch.int32, device='cuda') * args.input_len
 
     max_input_length = torch.max(input_lengths).item()
     decoder.setup(input_lengths.size(0), max_input_length, max_output_len,
                   num_beams)
 
-    output_gen_ids = decoder.decode(input_ids,
-                                    input_lengths,
-                                    sampling_config,
-                                    streaming=streaming)
+    times = 10
+    for _ in range(times):
+        output_gen_ids = decoder.decode(input_ids,
+                                        input_lengths,
+                                        sampling_config,
+                                        streaming=streaming)
+
+    torch.cuda.synchronize()
+    profiler.start('codeLlama34b-benchmark')
+
+    for _ in range(times):
+        output_gen_ids = decoder.decode(input_ids,
+                                        input_lengths,
+                                        sampling_config,
+                                        streaming=streaming)
+    torch.cuda.synchronize()
+    profiler.stop('codeLlama34b-benchmark')
+
+    print("-------------------------------------------")
+    print("Batch size: ", args.batch_size, "Input length: ", args.input_len, "Ouptut length: ", args.max_output_len, "Speed: ", profiler.elapsed_time_in_sec("codeLlama34b-benchmark") * 1000 / times, "ms")
+    print("output_gen_ids.shape = ", output_gen_ids.shape)
+
     torch.cuda.synchronize()
     if streaming:
         for output_ids in throttle_generator(output_gen_ids,
