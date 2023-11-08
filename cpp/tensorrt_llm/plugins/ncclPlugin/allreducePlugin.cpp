@@ -313,7 +313,7 @@ int AllreducePlugin::initialize() noexcept
     myRank = *(int*) (dlsym(so_handle, "global_rank"));
     nRanks = *(int*) (dlsym(so_handle, "global_size"));
 
-    std::string path("./temp/cache");
+    std::string path("./cacheForNCCLInit");
     auto store = c10::make_intrusive<::c10d::FileStore>(path, nRanks);
 
     c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
