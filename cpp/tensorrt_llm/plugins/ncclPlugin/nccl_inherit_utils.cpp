@@ -18,15 +18,32 @@
 #include "nccl_inherit_utils.h"
 
 HackGroupNCCL* global_hack_group_nccl_ptr;
+int global_rank;
+int global_size;
 
 void getProcessGroupNCCL(c10d::ProcessGroupNCCL& process_group_nccl)
 {
     c10d::ProcessGroupNCCL* process_group_nccl_ptr = &process_group_nccl;
     HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) process_group_nccl_ptr;
+
     global_hack_group_nccl_ptr = hack_group_nccl_ptr;
+}
+
+void getProcessGroupNCCL_list(pybind11::list hack_list, int rank, int size)
+{
+  for(auto process_group_nccl : hack_list)
+  {
+      c10d::ProcessGroupNCCL* process_group_nccl_ptr = reinterpret_cast<c10d::ProcessGroupNCCL*>(&process_group_nccl);
+      HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) process_group_nccl_ptr;
+
+      global_hack_group_nccl_ptr = hack_group_nccl_ptr;
+      global_rank = rank;
+      global_size = size;
+  }
 }
 
 PYBIND11_MODULE(libhackNCCL, m)
 {
     m.def("getProcessGroupNCCL", &getProcessGroupNCCL);
+    m.def("getProcessGroupNCCL_list", &getProcessGroupNCCL_list);
 }

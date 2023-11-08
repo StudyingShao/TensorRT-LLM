@@ -34,3 +34,5 @@ public:
 };
 
 extern HackGroupNCCL* global_hack_group_nccl_ptr;
+extern int global_rank;
+extern int global_size;

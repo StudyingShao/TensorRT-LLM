@@ -308,8 +308,10 @@ int AllreducePlugin::initialize() noexcept
     HackGroupNCCL* global_hack_group_nccl_ptr = *(HackGroupNCCL**) (dlsym(so_handle, "global_hack_group_nccl_ptr"));
 
     int myRank, nRanks;
-    myRank = global_hack_group_nccl_ptr->getRank();
-    nRanks = global_hack_group_nccl_ptr->getSize();
+    // myRank = global_hack_group_nccl_ptr->getRank();
+    // nRanks = global_hack_group_nccl_ptr->getSize();
+    myRank = *(int*) (dlsym(so_handle, "global_rank"));
+    nRanks = *(int*) (dlsym(so_handle, "global_size"));
 
     std::string path("./temp/cache");
     auto store = c10::make_intrusive<::c10d::FileStore>(path, nRanks);

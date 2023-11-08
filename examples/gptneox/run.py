@@ -53,7 +53,11 @@ if __name__ == '__main__':
 
     sys.path.append(os.path.relpath("../../cpp/build/tensorrt_llm/plugins/"))
     import libhackNCCL
-    libhackNCCL.getProcessGroupNCCL(process_group_nccl)
+    # libhackNCCL.getProcessGroupNCCL(process_group_nccl)
+
+    # Hack with a python list to bypass type check
+    hack_list = [process_group_nccl]
+    libhackNCCL.getProcessGroupNCCL_list(hack_list, process_group_nccl.rank(), process_group_nccl.size())
 
     args = parse_arguments()
     tensorrt_llm.logger.set_level(args.log_level)
