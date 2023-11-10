@@ -16,23 +16,9 @@
  */
 
 #pragma once
-
-/// pytorch version should be greater than 2.1.0
-#include "torch/csrc/distributed/c10d/FileStore.hpp"
-#include "torch/csrc/distributed/c10d/ProcessGroup.hpp"
-#include "torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp"
-
 #include <pybind11/pybind11.h>
-
-class HackGroupNCCL : public c10d::ProcessGroupNCCL
-{
-public:
-    void hack_broadcastUniqueNCCLID(ncclUniqueId* ncclID, bool isSingleP2POp, const std::string& devicesKey, int p2pRank)
-    {
-        broadcastUniqueNCCLID(ncclID, isSingleP2POp, devicesKey, p2pRank);
-    }
-};
-
-extern HackGroupNCCL* global_hack_group_nccl_ptr;
+#include <pybind11/stl.h>
+#include <nccl.h>
 extern int global_rank;
 extern int global_size;
+extern ncclUniqueId global_ncclID;

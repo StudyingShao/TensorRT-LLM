@@ -305,38 +305,16 @@ int AllreducePlugin::initialize() noexcept
         printf("Failed, dlopen error %s:%d '%s'\n", __FILE__, __LINE__, dlerror());                      \
         exit(EXIT_FAILURE);
     }
-    HackGroupNCCL* global_hack_group_nccl_ptr = *(HackGroupNCCL**) (dlsym(so_handle, "global_hack_group_nccl_ptr"));
 
     int myRank, nRanks;
-    // myRank = global_hack_group_nccl_ptr->getRank();
-    // nRanks = global_hack_group_nccl_ptr->getSize();
+    ncclUniqueId id;
     myRank = *(int*) (dlsym(so_handle, "global_rank"));
     nRanks = *(int*) (dlsym(so_handle, "global_size"));
-
-    std::string path("./cacheForNCCLInit");
-    auto store = c10::make_intrusive<::c10d::FileStore>(path, nRanks);
-
-    c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-    std::chrono::milliseconds pgTimeout = std::chrono::milliseconds(10 * 1000);
-    opts->timeout = pgTimeout;
-
-    std::unique_ptr<::c10d::ProcessGroupNCCL> pg_ = std::unique_ptr<::c10d::ProcessGroupNCCL>(
-        new ::c10d::ProcessGroupNCCL(store, myRank, nRanks, std::move(opts)));
-    HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) (void*) pg_.get();
-    std::string key("tp_nccl_key");
-
-    ncclUniqueId id;
-    if (myRank == 0)
-        ncclGetUniqueId(&id);
-    hack_group_nccl_ptr->hack_broadcastUniqueNCCLID(&id, true, key, myRank);
+    id = *(ncclUniqueId*) (dlsym(so_handle, "global_ncclID"));
+    dlclose(so_handle);
 
     (*commMap)[mGroup] = nullptr;
     NCCLCHECK(ncclCommInitRank(&((*commMap)[mGroup]), nRanks, id, myRank));
-
-    if (myRank == 0)
-    {
-        remove(path.c_str());
-    }
     // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 

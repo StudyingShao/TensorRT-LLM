@@ -119,8 +119,7 @@ target_link_libraries(
   ${CMAKE_DL_LIBS}
   ${MPI_LIBRARIES}
   ${NCCL_LIB}
-  ${STATIC_TARGET}
-  ${TORCH_LIBRARIES})
+  ${STATIC_TARGET})
 
 execute_process(
   COMMAND ${Python3_EXECUTABLE} "-c"
@@ -135,5 +134,5 @@ find_package(pybind11 REQUIRED)
 
 add_library(hackNCCL SHARED ./ncclPlugin/nccl_inherit_utils.cpp)
 set_property(TARGET hackNCCL PROPERTY POSITION_INDEPENDENT_CODE  ON)
-target_link_libraries(hackNCCL PRIVATE ${TORCH_LIBRARIES} pybind11::module)
+target_link_libraries(hackNCCL PRIVATE pybind11::module)
 

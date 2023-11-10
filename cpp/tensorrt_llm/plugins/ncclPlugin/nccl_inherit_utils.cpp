@@ -17,33 +17,30 @@
 
 #include "nccl_inherit_utils.h"
 
-HackGroupNCCL* global_hack_group_nccl_ptr;
 int global_rank;
 int global_size;
+ncclUniqueId global_ncclID;
 
-void getProcessGroupNCCL(c10d::ProcessGroupNCCL& process_group_nccl)
+void nccl_get_info(int rank, int size, std::vector<uint8_t>& vec)
 {
-    c10d::ProcessGroupNCCL* process_group_nccl_ptr = &process_group_nccl;
-    HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) process_group_nccl_ptr;
-
-    global_hack_group_nccl_ptr = hack_group_nccl_ptr;
+    global_rank = rank;
+    global_size = size;
+    std::memcpy(&global_ncclID, vec.data(), NCCL_UNIQUE_ID_BYTES);
 }
 
-void getProcessGroupNCCL_list(pybind11::list hack_list, int rank, int size)
+std::vector<uint8_t> nccl_create_uniqueId()
 {
-  for(auto process_group_nccl : hack_list)
-  {
-      c10d::ProcessGroupNCCL* process_group_nccl_ptr = reinterpret_cast<c10d::ProcessGroupNCCL*>(&process_group_nccl);
-      HackGroupNCCL* hack_group_nccl_ptr = (HackGroupNCCL*) process_group_nccl_ptr;
+    ncclUniqueId ncclID;
+    ncclGetUniqueId(&ncclID);
 
-      global_hack_group_nccl_ptr = hack_group_nccl_ptr;
-      global_rank = rank;
-      global_size = size;
-  }
+    auto vec = std::vector<uint8_t>(
+        reinterpret_cast<uint8_t*>(&ncclID), reinterpret_cast<uint8_t*>(&ncclID) + NCCL_UNIQUE_ID_BYTES);
+
+    return vec;
 }
 
 PYBIND11_MODULE(libhackNCCL, m)
 {
-    m.def("getProcessGroupNCCL", &getProcessGroupNCCL);
-    m.def("getProcessGroupNCCL_list", &getProcessGroupNCCL_list);
+    m.def("nccl_get_info", &nccl_get_info);
+    m.def("nccl_create_uniqueId", &nccl_create_uniqueId);
 }
