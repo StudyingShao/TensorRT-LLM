@@ -15,8 +15,10 @@
 import argparse
 import json
 import os
+import sys
 
 import torch
+import torch.distributed as dist
 from transformers import AutoTokenizer
 
 import tensorrt_llm
@@ -41,6 +43,25 @@ def parse_arguments():
 
 
 if __name__ == '__main__':
+
+    assert dist.is_nccl_available(), 'NCCL is unavailable!'
+
+    dist.init_process_group(backend='nccl')
+    runtime_rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    runtime_mapping = tensorrt_llm.Mapping(world_size,
+                                           runtime_rank,
+                                           tp_size=world_size)
+    torch.cuda.set_device(runtime_rank % runtime_mapping.gpus_per_node)
+
+    sys.path.append(os.path.relpath("../../cpp/build/tensorrt_llm/plugins/"))
+    import libhackNCCL
+    uid_vec = libhackNCCL.nccl_create_uniqueId()
+    uid_vec = torch.tensor(uid_vec).cuda()
+    dist.broadcast(uid_vec, src=0)
+    uid_vec = uid_vec.tolist()
+    libhackNCCL.nccl_get_info(runtime_rank, world_size, uid_vec)
+
     args = parse_arguments()
     tensorrt_llm.logger.set_level(args.log_level)
 
@@ -50,19 +71,22 @@ if __name__ == '__main__':
     use_gpt_attention_plugin = config['plugin_config']['gpt_attention_plugin']
     remove_input_padding = config['plugin_config']['remove_input_padding']
     dtype = config['builder_config']['precision']
-    world_size = config['builder_config']['tensor_parallel']
-    assert world_size == tensorrt_llm.mpi_world_size(), \
-        f'Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})'
+    # world_size = config['builder_config']['tensor_parallel']
+    # assert world_size == tensorrt_llm.mpi_world_size(), \
+        # f'Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})'
+    world_size_engine = config['builder_config']['tensor_parallel']
+    assert world_size == world_size_engine, \
+        f'Engine world size ({world_size_engine}) != Runtime world size ({world_size})'
     num_heads = config['builder_config']['num_heads'] // world_size
     hidden_size = config['builder_config']['hidden_size'] // world_size
     vocab_size = config['builder_config']['vocab_size']
     num_layers = config['builder_config']['num_layers']
 
-    runtime_rank = tensorrt_llm.mpi_rank()
-    runtime_mapping = tensorrt_llm.Mapping(world_size,
-                                           runtime_rank,
-                                           tp_size=world_size)
-    torch.cuda.set_device(runtime_rank % runtime_mapping.gpus_per_node)
+    # runtime_rank = tensorrt_llm.mpi_rank()
+    # runtime_mapping = tensorrt_llm.Mapping(world_size,
+    #                                        runtime_rank,
+    #                                        tp_size=world_size)
+    # torch.cuda.set_device(runtime_rank % runtime_mapping.gpus_per_node)
 
     engine_name = get_engine_name('gptneox', dtype, world_size, runtime_rank)
     serialize_path = os.path.join(args.engine_dir, engine_name)
@@ -101,7 +125,8 @@ if __name__ == '__main__':
     output_ids = decoder.decode(input_ids, input_lengths, sampling_config)
     torch.cuda.synchronize()
 
-    output_ids = output_ids.tolist()[0][0][input_ids.size(1):]
-    output_text = tokenizer.decode(output_ids)
-    print(f'Input: {args.input_text}')
-    print(f'Output: {output_text}')
+    if runtime_rank == 0:
+        output_ids = output_ids.tolist()[0][0][input_ids.size(1):]
+        output_text = tokenizer.decode(output_ids)
+        print(f'Input: {args.input_text}')
+        print(f'Output: {output_text}')
