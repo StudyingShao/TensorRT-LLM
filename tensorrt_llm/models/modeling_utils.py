@@ -415,13 +415,17 @@ class PretrainedModel(Module,
             weights_path = os.path.join(ckpt_dir, 'rank0.safetensors')
         else:
             rank = config.mapping.rank
+
+            percentile_quant_ckpt_dir = "/TRT/GPTQ_CheckPoints_GPT_NeoX/trtllm_github/examples/llama/jiangs/ckpt/tllm/llama-3-8b-inst/fp8"
+            percentile_quant_weights_path = os.path.join(percentile_quant_ckpt_dir, f'rank{rank}.safetensors')
             weights_path = os.path.join(ckpt_dir, f'rank{rank}.safetensors')
 
         assert os.path.isfile(weights_path)
         weights = safetensors.torch.load_file(weights_path)
+        percentile_quant_weights = safetensors.torch.load_file(percentile_quant_weights_path)
 
         is_checkpoint_pruned = getattr(config, 'is_pruned', False)
-        preprocess_weights(weights, config, from_pruned=is_checkpoint_pruned)
+        preprocess_weights(weights, percentile_quant_weights, config, from_pruned=is_checkpoint_pruned)
         model = cls(config)
         model.load(weights, from_pruned=is_checkpoint_pruned)
         return model
@@ -1090,6 +1094,7 @@ def optimize_model(
 
 
 def preprocess_weights(weights: Dict[str, torch.Tensor],
+                       percentile_quant_weights: Dict[str, torch.Tensor],
                        model_config: PretrainedConfig,
                        from_pruned=False) -> None:
     """This function in-place modifies weights and model_config, making them compatible with each other.
@@ -1162,6 +1167,14 @@ def preprocess_weights(weights: Dict[str, torch.Tensor],
         weights = weight_only_quantize_dict(weights=weights,
                                             quant_algo=quant_algo,
                                             plugin=True)
+
+    percentile_quant_modules = ['qkv', 'proj']
+    for name, param in percentile_quant_weights.items():
+        if any(percentile_quant_module in name for percentile_quant_module in percentile_quant_modules):
+            if name.endswith('weight') and param.dtype == torch.int8:
+                weights[name] = param.view(torch.float8_e4m3fn)
+            else:
+                weights[name] = param
 
     # FP8 kv_cache_scaling_factor is always 1.0
     if kv_cache_quant_algo == QuantAlgo.FP8:

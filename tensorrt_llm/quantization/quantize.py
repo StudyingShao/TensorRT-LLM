@@ -29,6 +29,12 @@ def quantize_layers(
         '*block_embedding',
     ]
 
+    percentile_quant_modules = ['qkv', 'proj']
+    percentile_quant_map = {
+        WeightOnlyGroupwiseQuantColumnLinear: FP8Linear,
+        WeightOnlyGroupwiseQuantRowLinear: FP8RowLinear,
+    }
+
     for name, module, parent in model.named_modules_with_parent():
         module_name = name.rsplit('.', 1)[-1]
         is_excluded = False
@@ -54,8 +60,17 @@ def quantize_layers(
                     "out_features"] = module.out_features * module.tp_size
             elif isinstance(module, RowLinear):
                 init_params["in_features"] = module.in_features * module.tp_size
-            if preprocess_init_params is not None:
-                preprocess_init_params(init_params, name, module)
+
+            if any(percentile_quant_module in name for percentile_quant_module in percentile_quant_modules):
+                quant_cls = percentile_quant_map[quant_cls]
+            else:
+                if preprocess_init_params is not None:
+                    preprocess_init_params(init_params, name, module)
+
+            print(name)
+            print(quant_cls)
+            print("-------------------------------------------------------------------------------")
+
             quant_layer = quant_cls(**init_params)
             if parent is not None:
                 setattr(parent, module_name, quant_layer)
