@@ -127,6 +127,7 @@ MODEL_NAME_PATTERN_MAP = {
     "Phi3SmallForCausalLM": "phi3small",
     "Phi3ForCausalLM": "phi3",
     "Starcoder2ForCausalLM": "gptnext",
+    "GLM": "glm",
 }
 
 
@@ -177,8 +178,15 @@ def get_model(ckpt_path, dtype="fp16", device="cuda"):
         raise NotImplementedError(f"Unknown dtype {dtype}")
 
     # Note: VILA model is not in public HF model zoo yet. We need to explicitly import from the git repo
+    hf_config = AutoConfig.from_pretrained(ckpt_path, trust_remote_code=True)
     if "vila" in ckpt_path:
         model = _get_vila_model(ckpt_path)
+    elif hf_config.model_type == "glm":
+        from transformers import AutoModel
+        model = AutoModel.from_pretrained(ckpt_path,
+                                          device_map="cuda",
+                                          torch_dtype=dtype,
+                                          trust_remote_code=True)
     else:
         model = AutoModelForCausalLM.from_pretrained(
             ckpt_path,
