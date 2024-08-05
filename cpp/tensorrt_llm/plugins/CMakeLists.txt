@@ -48,7 +48,7 @@ set(PLUGIN_LISTS
     weightOnlyQuantMatmulPlugin
     lookupPlugin
     loraPlugin
-    mixtureOfExperts
+    # mixtureOfExperts
     selectiveScanPlugin
     mambaConv1dPlugin
     lruPlugin

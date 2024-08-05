@@ -255,7 +255,7 @@ set(TRTLLM_LINK_LIBS
     kernels_src
     decoder_attention_src
     fpA_intB_gemm_src
-    moe_gemm_src
+    # moe_gemm_src
     gemm_swiglu_sm90_src
     cutlass_src
     layers_src

@@ -92,13 +92,14 @@ set_property(TARGET cutlass_src PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_library(fpA_intB_gemm_src STATIC ${MIXED_SRC_CPP} ${MIXED_SRC_CU}
                                      ${MIXED_CU_INSTANTIATIONS})
 # WARNING: Building with `-G` flag may generate invalid results for this target
-add_library(moe_gemm_src STATIC ${GROUPED_SRC_CU} ${GROUPED_SRC_CPP}
-                                ${GROUPED_CU_INSTANTIATIONS})
+# add_library(moe_gemm_src STATIC ${GROUPED_SRC_CU} ${GROUPED_SRC_CPP}
+#                                 ${GROUPED_CU_INSTANTIATIONS})
 
 set(GEMM_SWIGLU_SM90_SRC_CU
     ${CMAKE_CURRENT_SOURCE_DIR}/fused_gated_gemm/gemm_swiglu_e4m3.cu)
 add_library(gemm_swiglu_sm90_src STATIC ${GEMM_SWIGLU_SM90_SRC_CU})
-foreach(target_name fpA_intB_gemm_src;moe_gemm_src;gemm_swiglu_sm90_src)
+# foreach(target_name fpA_intB_gemm_src;moe_gemm_src;gemm_swiglu_sm90_src)
+foreach(target_name fpA_intB_gemm_src;gemm_swiglu_sm90_src)
   set_property(TARGET ${target_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
   set_property(TARGET ${target_name} PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 

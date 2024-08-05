@@ -175,7 +175,7 @@ extern "C"
         static tensorrt_llm::plugins::GPTAttentionPluginCreator gptAttentionPluginCreator;
         static tensorrt_llm::plugins::GemmPluginCreator gemmPluginCreator;
         static tensorrt_llm::plugins::GemmSwigluPluginCreator gemmSwigluPluginCreator;
-        static tensorrt_llm::plugins::MixtureOfExpertsPluginCreator moePluginCreator;
+        // static tensorrt_llm::plugins::MixtureOfExpertsPluginCreator moePluginCreator;
 #if ENABLE_MULTI_DEVICE
         static tensorrt_llm::plugins::SendPluginCreator sendPluginCreator;
         static tensorrt_llm::plugins::RecvPluginCreator recvPluginCreator;
@@ -204,7 +204,7 @@ extern "C"
                   creatorPtr(gptAttentionPluginCreator),
                   creatorPtr(gemmPluginCreator),
                   creatorPtr(gemmSwigluPluginCreator),
-                  creatorPtr(moePluginCreator),
+                //   creatorPtr(moePluginCreator),
 #if ENABLE_MULTI_DEVICE
                   creatorPtr(sendPluginCreator),
                   creatorPtr(recvPluginCreator),
