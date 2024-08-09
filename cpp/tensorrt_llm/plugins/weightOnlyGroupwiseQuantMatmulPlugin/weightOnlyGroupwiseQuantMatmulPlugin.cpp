@@ -43,35 +43,35 @@ std::vector<nvinfer1::PluginField> WeightOnlyGroupwiseQuantMatmulPluginCreator::
 void WeightOnlyGroupwiseQuantGemmPluginProfiler::runTactic(int m, int n, int k,
     WeightOnlyGroupwiseQuantGemmPluginProfiler::Config const& tactic, char* workspace, cudaStream_t const& stream)
 {
-    // Quantized weights are packed in FP16 format (INT4*4 -> FP16)
-    int const originalN = n * FP16_INT4_RATIO;
-    half* actPtr = reinterpret_cast<half*>(workspace);
-    cutlass::uint4b_t* weightPtr = reinterpret_cast<cutlass::uint4b_t*>(
-        nextWorkspacePtr(reinterpret_cast<int8_t*>(actPtr), m * k * sizeof(half)));
-    half* inputScalesPtr
-        = reinterpret_cast<half*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(weightPtr), n * k * sizeof(float)));
-    half* zerosPtr = reinterpret_cast<half*>(
-        nextWorkspacePtr(reinterpret_cast<int8_t*>(inputScalesPtr), k * originalN * sizeof(half) / mGroupSize));
-    half* biasesPtr = reinterpret_cast<half*>(
-        nextWorkspacePtr(reinterpret_cast<int8_t*>(zerosPtr), k * originalN * sizeof(half) / mGroupSize));
-    half* outputPtr = reinterpret_cast<half*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(biasesPtr), m * sizeof(half)));
-    char* workspacePtr
-        = reinterpret_cast<char*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(outputPtr), m * originalN * sizeof(half)));
+    // // Quantized weights are packed in FP16 format (INT4*4 -> FP16)
+    // int const originalN = n * FP16_INT4_RATIO;
+    // half* actPtr = reinterpret_cast<half*>(workspace);
+    // cutlass::uint4b_t* weightPtr = reinterpret_cast<cutlass::uint4b_t*>(
+    //     nextWorkspacePtr(reinterpret_cast<int8_t*>(actPtr), m * k * sizeof(half)));
+    // half* inputScalesPtr
+    //     = reinterpret_cast<half*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(weightPtr), n * k * sizeof(float)));
+    // half* zerosPtr = reinterpret_cast<half*>(
+    //     nextWorkspacePtr(reinterpret_cast<int8_t*>(inputScalesPtr), k * originalN * sizeof(half) / mGroupSize));
+    // half* biasesPtr = reinterpret_cast<half*>(
+    //     nextWorkspacePtr(reinterpret_cast<int8_t*>(zerosPtr), k * originalN * sizeof(half) / mGroupSize));
+    // half* outputPtr = reinterpret_cast<half*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(biasesPtr), m * sizeof(half)));
+    // char* workspacePtr
+    //     = reinterpret_cast<char*>(nextWorkspacePtr(reinterpret_cast<int8_t*>(outputPtr), m * originalN * sizeof(half)));
 
-    if ((mQuantAlgo & ZERO) == 0)
-    {
-        zerosPtr = nullptr;
-    }
+    // if ((mQuantAlgo & ZERO) == 0)
+    // {
+    //     zerosPtr = nullptr;
+    // }
 
-    if ((mQuantAlgo & BIAS) == 0)
-    {
-        biasesPtr = nullptr;
-    }
+    // if ((mQuantAlgo & BIAS) == 0)
+    // {
+    //     biasesPtr = nullptr;
+    // }
 
-    int const wsSize = mRunner->getWorkspaceSize(m, n, k);
+    // int const wsSize = mRunner->getWorkspaceSize(m, n, k);
 
-    mRunner->gemm(actPtr, weightPtr, inputScalesPtr, zerosPtr, biasesPtr, outputPtr, m, originalN, k, mGroupSize,
-        tactic, workspacePtr, wsSize, stream);
+    // mRunner->gemm(actPtr, weightPtr, inputScalesPtr, zerosPtr, biasesPtr, outputPtr, m, originalN, k, mGroupSize,
+    //     tactic, workspacePtr, wsSize, stream);
 }
 
 void WeightOnlyGroupwiseQuantGemmPluginProfiler::computeTmpSize(int maxM, int n, int k)
@@ -450,13 +450,36 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
 
         int32_t* weight_ptr = const_cast<int32_t*>(reinterpret_cast<int32_t const*>(inputs[mWeightInputIdx]));
 
-        auto const& bestTactic = mPluginProfiler->getBestConfig(m, mGemmId);
-        TLLM_CHECK_WITH_INFO(bestTactic,
-            "No valid weight only groupwise GEMM tactic(It is usually caused by the failure to execute all "
-            "candidate "
-            "configurations of the CUTLASS kernel, please pay attention to the warning information when building "
-            "the "
-            "engine.)");
+        // auto const& bestTactic = mPluginProfiler->getBestConfig(m, mGemmId);
+        // TLLM_CHECK_WITH_INFO(bestTactic,
+        //     "No valid weight only groupwise GEMM tactic(It is usually caused by the failure to execute all "
+        //     "candidate "
+        //     "configurations of the CUTLASS kernel, please pay attention to the warning information when building "
+        //     "the "
+        //     "engine.)");
+
+        WeightOnlyGroupwiseQuantGemmPluginProfiler::Config bestTactic_;
+        WeightOnlyGroupwiseQuantGemmPluginProfiler::Config *bestTactic = &bestTactic_;
+        bestTactic->tile_config = tensorrt_llm::cutlass_extensions::CutlassTileConfig::CtaShape16x128x64_WarpShape16x32x64;
+        bestTactic->stages = 3;
+        bestTactic->split_k_factor = 4;
+
+        printf("bestTactic --------------------------------------------------\n");
+        printf("bestTactic.tile_config = %d\n", static_cast<int>(bestTactic->tile_config));
+        printf("bestTactic.stages = %d\n", bestTactic->stages);
+        printf("bestTactic.split_k_factor = %d\n", bestTactic->split_k_factor);
+        printf("bestTactic --------------------------------------------------\n");
+
+        /*
+        // A100 m10n8192k4096 锁频1512,1410
+        bestTactic --------------------------------------------------
+        bestTactic.tile_config = 3 -> CtaShape16x128x64_WarpShape16x32x64
+            grid shape -> 1, 8192/128=64, 4
+            block shape -> 16/16 x 128/32 x 64/64 x 32 = 128
+        bestTactic.stages = 3
+        bestTactic.split_k_factor = 4
+        bestTactic --------------------------------------------------
+        */
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         cudaEvent_t _event_start;

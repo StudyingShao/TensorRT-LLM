@@ -94,12 +94,16 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         = cutlass::gemm::kernel::MixedGemmArchTraits<CutlassActivationType, CutlassWeightType, arch>;
     using ElementAccumulator = typename MixedGemmArchTraits::AccType;
 
-    constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<CutlassOutputType>::value;
+    // constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<CutlassOutputType>::value;
+    constexpr int ElementsPerAccessC = 64 / cutlass::sizeof_bits<CutlassOutputType>::value;
     using EpilogueOp =
         typename tkc::Epilogue<CutlassOutputType, ElementsPerAccessC, ElementAccumulator, EpilogueTag>::Op;
 
     using Operator = typename MixedGemmArchTraits::Operator;
     using TaggedOperator = typename cutlass::arch::TagOperator<Operator, QuantOp>::TaggedOperator;
+
+    // printf("MixedGemmArchTraits::ElementsPerAccessA = %d\n", MixedGemmArchTraits::ElementsPerAccessA);
+    // printf("MixedGemmArchTraits::ElementsPerAccessB = %d\n", MixedGemmArchTraits::ElementsPerAccessB);
 
     using GemmKernel_ = typename cutlass::gemm::kernel::DefaultGemm<CutlassActivationType, cutlass::layout::RowMajor,
         MixedGemmArchTraits::ElementsPerAccessA, CutlassWeightType, typename MixedGemmArchTraits::LayoutB,
@@ -109,6 +113,7 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         typename cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>, Stages, true,
         TaggedOperator>::GemmKernel;
 
+    // cutlass kernel
     using GemmKernel = cutlass::gemm::kernel::GemmFpAIntB<typename GemmKernel_::Mma, typename GemmKernel_::Epilogue,
         typename GemmKernel_::ThreadblockSwizzle,
         arch, // Ensure top level arch is used for dispatch
@@ -172,6 +177,8 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
             throw std::runtime_error("Weight zero-points must be null when running per column scaling");
         }
     }
+
+    // printf("gemm_config.split_k_factor = %d\n", gemm_config.split_k_factor);
 
     int const ld_scale_zero = cutlass::isFinegrained(QuantOp) ? n : 0;
     ElementAccumulator output_op_beta = (biases == nullptr) ? ElementAccumulator(0.f) : ElementAccumulator(1.f);
@@ -343,9 +350,16 @@ void dispatch_gemm_to_cutlass(ActivationType const* A, WeightType const* B, Scal
             TLLM_CHECK_WITH_INFO(arch::kMinComputeCapability >= 75, "Invalid config on Volta");
             if constexpr (arch::kMinComputeCapability >= 75)
             {
+                // printf("jiangs specific gemm tile\n");
                 dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
-                    EpilogueTag, cutlass::gemm::GemmShape<16, 128, tile_shape_k>,
-                    cutlass::gemm::GemmShape<16, 32, tile_shape_k>>(A, B, weight_scales, weight_zero_points, biases,
+                    EpilogueTag,
+                    // cutlass::gemm::GemmShape<16, 128, tile_shape_k>, // block tile
+                    // cutlass::gemm::GemmShape<16, 32, tile_shape_k>   // warp tile
+                    cutlass::gemm::GemmShape<16, 64, tile_shape_k>, // block tile
+                    cutlass::gemm::GemmShape<16, 16, tile_shape_k>  // warp tile
+                    // cutlass::gemm::GemmShape<16, 32, tile_shape_k>, // block tile
+                    // cutlass::gemm::GemmShape<16, 16, tile_shape_k>  // warp tile
+                    >(A, B, weight_scales, weight_zero_points, biases,
                     alpha, C, m, n, k, group_size, gemm_config, workspace, workspace_bytes, stream, occupancy);
             }
             break;
@@ -548,6 +562,7 @@ template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuant
 std::vector<tkc::CutlassGemmConfig>
 CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::getConfigs() const
 {
+    // jiangs get_candidate_configs
     static constexpr bool is_weight_only = !std::is_same<ActivationType, WeightType>::value;
     tkc::CutlassGemmConfig::CandidateConfigTypeParam config_type_param
         = tkc::CutlassGemmConfig::CandidateConfigTypeParam::HOPPER;
