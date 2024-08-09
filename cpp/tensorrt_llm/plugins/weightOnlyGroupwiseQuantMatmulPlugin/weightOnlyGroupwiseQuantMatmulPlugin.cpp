@@ -457,10 +457,43 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
             "configurations of the CUTLASS kernel, please pay attention to the warning information when building "
             "the "
             "engine.)");
-        m_weightOnlyGroupwiseGemmRunner->gemm(act_ptr, weight_ptr, inputs[mScalesInputIdx], zeros_ptr, biases_ptr,
-            alpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
-            reinterpret_cast<char*>(workspace) + m * k * sizeof(half), ws_bytes, stream);
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        cudaEvent_t _event_start;
+        cudaEvent_t _event_end;
+        float _event_time;
+        cudaEventCreate(&_event_start);
+        cudaEventCreate(&_event_end);
+
+        int warmups = 100;
+        int reps = 500;
+
+        for (size_t i = 0; i < warmups; i++)
+        {
+            m_weightOnlyGroupwiseGemmRunner->gemm(act_ptr, weight_ptr, inputs[mScalesInputIdx], zeros_ptr, biases_ptr,
+                alpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
+                reinterpret_cast<char*>(workspace) + m * k * sizeof(half), ws_bytes, stream);
+        }
+
+        cudaEventRecord(_event_start);
+
+        for (size_t i = 0; i < reps; i++)
+        {
+            m_weightOnlyGroupwiseGemmRunner->gemm(act_ptr, weight_ptr, inputs[mScalesInputIdx], zeros_ptr, biases_ptr,
+                alpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
+                reinterpret_cast<char*>(workspace) + m * k * sizeof(half), ws_bytes, stream);
+        }
+        cudaEventRecord(_event_end);
+        cudaEventSynchronize(_event_end);
+        cudaEventElapsedTime(&_event_time, _event_start, _event_end);
+        float _event_time_once = _event_time / reps;
+        cudaDeviceSynchronize();
+        printf("jiangs average time: %10.3fus\t", _event_time_once * 1000);
+        printf("jiangs %s\n", cudaGetErrorString(cudaGetLastError()));
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     }
+
+
     return 0;
 }
 
