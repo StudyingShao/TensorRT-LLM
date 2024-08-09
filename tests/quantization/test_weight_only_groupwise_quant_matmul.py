@@ -154,14 +154,21 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
         activation = torch.randn(m, k, dtype=activation_dtype, device="cuda")
         bias = torch.randn(1, n, dtype=activation_dtype,
                            device="cuda") if has_bias else None
-        zero = torch.randn(
-            total_groups, n, dtype=activation_dtype,
-            device="cuda") if has_zero else None
+        # zero = torch.randn(
+        #     total_groups, n, dtype=activation_dtype,
+        #     device="cuda") if has_zero else None
 
         scale = torch.rand(total_groups,
                            n,
                            dtype=activation_dtype,
-                           device="cuda")
+                           device="cuda") / 100
+        zero = None
+        if has_zero:
+            zero_uint4 = torch.randint(0, 7, (total_groups, n), dtype=torch.int32, device="cuda") 
+            zero = zero_uint4.to(dtype=activation_dtype)
+            zero = zero * scale
+
+        # scale = torch.ones_like(scale)
         pre_quant_scale = torch.rand(1,
                                      k,
                                      dtype=activation_dtype,
@@ -228,6 +235,9 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
             activation = torch.mul(activation, pre_quant_scale)
 
         ref = _utils.woq_groupwise_gt_matmul(activation, ref_th_weight, bias)
+
+        for i in range(500):
+            print(f"{ref[0, i]}, {output[0, i]}")
         _utils.woq_assert_near_eq(ref, output, 2)
 
     @parameterized.expand(
@@ -391,6 +401,31 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
                                    group_size,
                                    use_w4a8_awq=True)
 
+def jiangs_single_test():
+    torch.manual_seed(0)
+    test = TestWeightOnlyGroupWiseQuantMatmul()
+
+    m = 10
+    n = 8192
+    k = 4096
+    dtype = 'float16'
+    has_pre_quant = False
+    has_zero = True
+    has_bias = False
+    group_size=128
+
+    test._woq_groupwise_matmul(
+        m=m,
+        n=n, 
+        k=k, 
+        activation_dtype_str=dtype, 
+        quantized_weight_dtype=torch.quint4x2,
+        has_pre_quant=has_pre_quant, 
+        has_zero=has_zero, 
+        has_bias=has_bias,                      
+        group_size=group_size)
+
 
 if __name__ == '__main__':
-    unittest.main()
+    # unittest.main()
+    jiangs_single_test()
