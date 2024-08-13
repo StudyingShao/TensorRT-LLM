@@ -253,7 +253,7 @@ public:
     }
 
     CUTLASS_DEVICE
-    void copy_scales_and_advance(IteratorScale& iterator_scale, int stage = -1, int k_iter = -1)
+    void copy_scales_and_advance(IteratorScale& iterator_scale, int k_iter = -1)
     {
         static_assert(IteratorScale::Shape::kRow == 1, "Scale stride must be 1.");
 
@@ -267,11 +267,14 @@ public:
 
         int const kSrcBytes = sizeof_bits<typename IteratorScale::Element>::value * IteratorScale::kAlignment / 8;
 
-        cutlass::arch::cp_async<kSrcBytes, kCacheOpB>(smem_scale_ptr, gmem_scale_ptr, iterator_scale.valid());
-
-        if (gmem_zero_ptr != nullptr)
+        if (!(k_iter & 0x1))
         {
-            cutlass::arch::cp_async<kSrcBytes, kCacheOpB>(smem_zero_ptr, gmem_zero_ptr, iterator_scale.valid());
+            cutlass::arch::cp_async<kSrcBytes, kCacheOpB>(smem_scale_ptr, gmem_scale_ptr, iterator_scale.valid());
+
+            if (gmem_zero_ptr != nullptr)
+            {
+                cutlass::arch::cp_async<kSrcBytes, kCacheOpB>(smem_zero_ptr, gmem_zero_ptr, iterator_scale.valid());
+            }
         }
 
         if (iterator_scale.group_size_ == 64)
@@ -460,7 +463,7 @@ public:
                 ++this->smem_iterator_B_;
             }
 
-            copy_scales_and_advance(iterator_scale, stage, gemm_k_iterations);
+            copy_scales_and_advance(iterator_scale, gemm_k_iterations);
 
             // Move to the next stage
             iterator_A.add_tile_offset({0, 1});
@@ -545,7 +548,10 @@ public:
         this->warp_tile_iterator_A_.load(warp_frag_A[0]);
         this->warp_tile_iterator_B_.load(warp_frag_B[0]);
 
-        warp_dequantizer_.load(warp_frag_scales, warp_frag_zeros);
+        if(!(gemm_k_iterations & 0x1))
+        {
+            warp_dequantizer_.load(warp_frag_scales, warp_frag_zeros);
+        }
 
         ++this->warp_tile_iterator_A_;
         ++this->warp_tile_iterator_B_;
@@ -621,7 +627,7 @@ public:
                     // This is the first group of a given stage, so we issue the loads for the B scales immediately.
                     if (group_start_iteration_B == 0)
                     {
-                        copy_scales_and_advance(iterator_scale);
+                        copy_scales_and_advance(iterator_scale, gemm_k_iterations);
                     }
                 }
 
@@ -684,7 +690,10 @@ public:
             }
 
             // Load the scale needed for the next tile iteration.
-            warp_dequantizer_.load(warp_frag_scales, warp_frag_zeros);
+            if(!(gemm_k_iterations & 0x1))
+            {
+                warp_dequantizer_.load(warp_frag_scales, warp_frag_zeros);
+            }
             // Update internal pointer to set of scales in shared memory.
             warp_dequantizer_.add_pointer_offset(Shape::kN);
         }
