@@ -222,6 +222,12 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
             zero_ref = zero.repeat_interleave(group_size, dim=0)[:k, :]
             ref_th_weight += zero_ref
 
+        # zero.shape: torch.Size([32, 8192]) k 4096/128, n 8192
+        # for convert_new
+        # zero -= 1032 * scale
+        # for convert_new2
+        zero -= 72 * scale
+
         output = self._run_matmul_plugin(activation, pre_quant_scale,
                                          cuda_q_weight.cuda(), scale, zero,
                                          bias, fp8_alpha, activation_dtype_str,
