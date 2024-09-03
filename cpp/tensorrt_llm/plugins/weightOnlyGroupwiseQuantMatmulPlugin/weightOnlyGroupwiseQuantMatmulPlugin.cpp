@@ -148,25 +148,25 @@ void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int qua
     {
         if (quant_algo & FP8_ALPHA)
         {
-            // Ada & Hopper style kernels
-            if (mArch < 89)
-            {
-                TLLM_THROW("W4A(fp)8 kernel is unsupported on pre-Ada (sm<89) architectures!");
-            }
-            if (quant_algo & ZERO)
-            {
-                // has zeros
-                m_weightOnlyGroupwiseGemmRunner = std::make_shared<
-                    tensorrt_llm::kernels::cutlass_kernels::CutlassFpAIntBGemmRunner<__nv_fp8_e4m3, cutlass::uint4b_t,
-                        cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS, half, half, half>>();
-            }
-            else
-            {
-                // no zeros
-                m_weightOnlyGroupwiseGemmRunner
-                    = std::make_shared<tensorrt_llm::kernels::cutlass_kernels::CutlassFpAIntBGemmRunner<__nv_fp8_e4m3,
-                        cutlass::uint4b_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY, half, half, half>>();
-            }
+            // // Ada & Hopper style kernels
+            // if (mArch < 89)
+            // {
+            //     TLLM_THROW("W4A(fp)8 kernel is unsupported on pre-Ada (sm<89) architectures!");
+            // }
+            // if (quant_algo & ZERO)
+            // {
+            //     // has zeros
+            //     m_weightOnlyGroupwiseGemmRunner = std::make_shared<
+            //         tensorrt_llm::kernels::cutlass_kernels::CutlassFpAIntBGemmRunner<__nv_fp8_e4m3, cutlass::uint4b_t,
+            //             cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS, half, half, half>>();
+            // }
+            // else
+            // {
+            //     // no zeros
+            //     m_weightOnlyGroupwiseGemmRunner
+            //         = std::make_shared<tensorrt_llm::kernels::cutlass_kernels::CutlassFpAIntBGemmRunner<__nv_fp8_e4m3,
+            //             cutlass::uint4b_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY, half, half, half>>();
+            // }
         }
         else
         {

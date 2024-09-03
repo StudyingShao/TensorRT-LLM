@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "tensorrt_llm/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm_template.h"
+// #include "tensorrt_llm/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm_template.h"
 
-namespace tensorrt_llm
-{
-namespace kernels
-{
-namespace cutlass_kernels
-{
-template class CutlassFpAIntBGemmRunner<half, uint8_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>;
-} // namespace cutlass_kernels
-} // namespace kernels
-} // namespace tensorrt_llm
+// namespace tensorrt_llm
+// {
+// namespace kernels
+// {
+// namespace cutlass_kernels
+// {
+// template class CutlassFpAIntBGemmRunner<half, uint8_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>;
+// } // namespace cutlass_kernels
+// } // namespace kernels
+// } // namespace tensorrt_llm

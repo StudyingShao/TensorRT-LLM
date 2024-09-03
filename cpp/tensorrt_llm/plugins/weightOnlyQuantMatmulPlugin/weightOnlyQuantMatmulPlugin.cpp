@@ -119,20 +119,20 @@ void WeightOnlyQuantMatmulPlugin::init(nvinfer1::DataType type, WeightTypeId wei
     {
         if (mType == nvinfer1::DataType::kHALF)
         {
-            m_weightOnlyGemmRunner = std::make_shared<
-                CutlassFpAIntBGemmRunner<half, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>>();
-            mCudaKernelEnabled = tensorrt_llm::kernels::weight_only::is_supported(
-                mArch, tensorrt_llm::kernels::weight_only::KernelType::FP16Int8PerChannel);
-            mCudaKernelType = tensorrt_llm::kernels::weight_only::KernelType::FP16Int8PerChannel;
+            // m_weightOnlyGemmRunner = std::make_shared<
+            //     CutlassFpAIntBGemmRunner<half, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>>();
+            // mCudaKernelEnabled = tensorrt_llm::kernels::weight_only::is_supported(
+            //     mArch, tensorrt_llm::kernels::weight_only::KernelType::FP16Int8PerChannel);
+            // mCudaKernelType = tensorrt_llm::kernels::weight_only::KernelType::FP16Int8PerChannel;
         }
 #if defined(ENABLE_BF16)
         else if (mType == nvinfer1::DataType::kBF16)
         {
-            m_weightOnlyGemmRunner = std::make_shared<
-                CutlassFpAIntBGemmRunner<__nv_bfloat16, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>>();
-            mCudaKernelEnabled = tensorrt_llm::kernels::weight_only::is_supported(
-                mArch, tensorrt_llm::kernels::weight_only::KernelType::BF16Int8PerChannel);
-            mCudaKernelType = tensorrt_llm::kernels::weight_only::KernelType::BF16Int8PerChannel;
+            // m_weightOnlyGemmRunner = std::make_shared<
+            //     CutlassFpAIntBGemmRunner<__nv_bfloat16, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>>();
+            // mCudaKernelEnabled = tensorrt_llm::kernels::weight_only::is_supported(
+            //     mArch, tensorrt_llm::kernels::weight_only::KernelType::BF16Int8PerChannel);
+            // mCudaKernelType = tensorrt_llm::kernels::weight_only::KernelType::BF16Int8PerChannel;
         }
 #endif
         else
