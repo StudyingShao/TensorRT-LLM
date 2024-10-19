@@ -40,3 +40,17 @@ tensorrt_llm/bindings/*.pyi
 # Testing
 .coverage.*
 results_trt/
+
+# jiangs
+*.ncu-rep
+jiangs/
+command.sh
+shao_gitset.sh
+shao_rebuild.sh
+# mmlu
+data/
+jiangs_log_process.py
+# gptq
+auto_gptq_convert.py
+# QuaRot
+quarot-rotated_validate.py
