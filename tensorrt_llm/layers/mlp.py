@@ -200,14 +200,27 @@ class GatedMLP(MLP):
                 0, "mlp_4h_to_h")
 
         inter = self.fc(hidden_states, mlp_fc_lora_params)
+        # ------------------------------------------------------
+        print("jiangs: {mlp_fc_output} register success")
+        self.register_network_output('mlp_fc_output', inter)
+        # ------------------------------------------------------
+
         inter = ACT2FN[self.hidden_act](inter)
         gate = self.gate(hidden_states, mlp_gate_lora_params)
+        # ------------------------------------------------------
+        print("jiangs: {mlp_gate_output} register success")
+        self.register_network_output('mlp_gate_output', gate)
+        # ------------------------------------------------------
         intermediate = inter * gate
         if self.inner_layernorm is not None:
             intermediate = self.inner_layernorm(intermediate)
         output = self.proj(intermediate,
                            lora_runtime_params=mlp_proj_lora_params,
                            reduce_fusion_params=reduce_fusion_params)
+        # ------------------------------------------------------
+        print("jiangs: {mlp_proj_output} register success")
+        self.register_network_output('mlp_proj_output', output)
+        # ------------------------------------------------------
         return output
 
 

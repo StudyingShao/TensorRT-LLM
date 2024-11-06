@@ -1381,6 +1381,9 @@ def preprocess_perlayer_weights(weights,
                         name.replace('weights_scaling_factor',
                                      'weights_scaling_factor_2'))
                     weights[name] /= weights_scaling_factor_2
+                    weights[name] = weights[name].to(torch.float16)
+                    print(f"{name}, {weights[name]}")
+                    weights[name] = weights[name].view(str_dtype_to_torch(model_config.dtype))
                     weights[name.replace(
                         'weights_scaling_factor',
                         'prequant_scaling_factor')] /= activation_scaling_factor

@@ -3065,10 +3065,10 @@ class GenerationSession(object):
             encoder_input_lengths: torch.Tensor,
             stopping_criteria: StoppingCriteria,
             logits_processor: LogitsProcessor, **kwargs):
-        if self.debug_mode:
-            print(
-                f"=================================== STEP {step} =================================="
-            )
+        # if self.debug_mode:
+        #     print(
+        #         f"=================================== STEP {step} =================================="
+        #     )
         if step % 2:
             context = self.runtime.context_0
             this_src_cache_indirection = cache_indirections[1]
@@ -3168,6 +3168,37 @@ class GenerationSession(object):
 
         if not ok:
             raise RuntimeError(f"Executing TRT engine failed step={step}!")
+
+        if self.debug_mode:
+            torch.cuda.synchronize()
+            # -------------------------------------------
+            if step == 0:
+                print(self.debug_buffer.keys())
+
+            print(f"----------------------- Step: {step} -----------------------")
+            print('logits' + "------------------------------------------------------------------------------------")
+            print(self.debug_buffer['logits'])
+            
+            if step < 2:
+                jiangs_list = ['transformer.layers.0.mlp.mlp_fc_output',
+                          'transformer.layers.0.mlp.mlp_gate_output',
+                          'transformer.layers.0.mlp.mlp_proj_output',
+                          'transformer.layers.0.attention.attn_dense_output',
+                          'transformer.layers.0.attention.attn_qkv_output',
+                          'transformer.layers.27.mlp.mlp_fc_output',
+                          'transformer.layers.27.mlp.mlp_gate_output',
+                          'transformer.layers.27.mlp.mlp_proj_output',
+                          'transformer.layers.27.attention.attn_dense_output',
+                          'transformer.layers.27.attention.attn_qkv_output',]
+                for jiangs in jiangs_list:
+                    print(f"{jiangs} {self.debug_buffer[jiangs].shape} {self.debug_buffer[jiangs].max()} {self.debug_buffer[jiangs].mean()}------------------------------------------------------------------------------------")
+                    print(self.debug_buffer[jiangs])
+
+                    # import pickle
+                    # file_path = "/TRT/GPTQ_CheckPoints_GPT_NeoX/latest_trtllm_github/examples/qwen/jiangs/debug/bf16_" + jiangs + ".pickle"
+                    # with open(file_path, "wb") as f:
+                    #     pickle.dump(self.debug_buffer[jiangs].cpu(), f)
+            # -------------------------------------------
 
         # TODO: remove this Windows WAR after https://nvbugs/4460474 is fixed.
         if platform.system() == "Windows" or self.debug_mode:
@@ -3446,7 +3477,7 @@ class GenerationSession(object):
                     self.cross_pools_kv_cache_manager.step([True] * batch_size)
 
         if self.debug_mode:
-            self.dump_debug_buffers(step)
+            # self.dump_debug_buffers(step)
 
             if next_step_tensors is not None:
                 self.debug_buffer = {

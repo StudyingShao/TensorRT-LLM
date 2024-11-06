@@ -138,22 +138,22 @@ WeightOnlyGroupwiseQuantMatmulPlugin::WeightOnlyGroupwiseQuantMatmulPlugin(
         (int) length, (int) (d - a));
 }
 
-template <typename ActivationType, typename WeightType, typename OutputType, cutlass::WeightOnlyQuantOp QuantOp>
+template <typename ActivationType, typename WeightType, typename OutputType, typename ScaleZeroType, cutlass::WeightOnlyQuantOp QuantOp>
 using GemmRunner = tensorrt_llm::kernels::cutlass_kernels::CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp,
-    OutputType, OutputType, OutputType>;
+    ScaleZeroType, OutputType, OutputType>;
 
-template <typename ActivationType, typename WeightType, typename OutputType>
+template <typename ActivationType, typename WeightType, typename OutputType, typename ScaleZeroType = OutputType>
 WeightOnlyGemmRunnerPtr selectGemmRunnerForZERO(int quant_algo)
 {
     if (quant_algo & ZERO)
     {
-        return std::make_shared<GemmRunner<ActivationType, WeightType, OutputType,
+        return std::make_shared<GemmRunner<ActivationType, WeightType, OutputType, ScaleZeroType,
             cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>>();
     }
     else
     {
-        return std::make_shared<
-            GemmRunner<ActivationType, WeightType, OutputType, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
+        return std::make_shared<GemmRunner<ActivationType, WeightType, OutputType, ScaleZeroType,
+            cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>>();
     }
 }
 
@@ -230,7 +230,16 @@ void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int qua
             {
                 TLLM_THROW("W4A(fp)8 kernel is unsupported on pre-Ada (sm<89) architectures!");
             }
-            TLLM_THROW("FP8 is unsupported on with BF16 scales and zero-points!");
+            else if(mArch < 90)
+            {
+                assert(!(quant_algo & INT8_WEIGHT) && "W4A(fp)8 kernel requires INT4 weight!");
+                m_weightOnlyGroupwiseGemmRunner
+                    = selectGemmRunnerForZERO<__nv_fp8_e4m3, cutlass::uint4b_t, __nv_bfloat16, half>(quant_algo);
+            }
+            else
+            {
+                TLLM_THROW("FP8 is unsupported on with BF16 scales and zero-points!");
+            }
         }
         else
         {
@@ -461,6 +470,8 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
 
     if (use_cuda_kernel)
     {
+        printf("jiangs cuda hack %d\n", static_cast<bool>(mQuantAlgo & FP8_ALPHA));
+
         void const* pre_quant_scale_ptr = nullptr;
         if (use_pre_quant_scale)
             pre_quant_scale_ptr = inputs[mPreQuantScaleInputIdx];
@@ -493,6 +504,65 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
         m_weightOnlyGroupwiseGemmRunner->gemm(act_ptr, weight_ptr, inputs[mScalesInputIdx], zeros_ptr, biases_ptr,
             alpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
             reinterpret_cast<char*>(workspace) + m * k * sizeof(half), ws_bytes, stream);
+        
+        printf("----------------------------------------------------------------------------------------------\n");
+        __nv_fp8_e4m3 input_ptr_fp8[50];
+        half scale_ptr[50];
+        cudaMemcpy(input_ptr_fp8, act_ptr, 50 * sizeof(__nv_fp8_e4m3), cudaMemcpyDeviceToHost);
+        cudaMemcpy(scale_ptr, inputs[mScalesInputIdx], 50 * sizeof(half), cudaMemcpyDeviceToHost);
+
+        printf("input: ");
+        for (int i = 0; i < 50; i++)
+        {
+            printf("%f ", static_cast<float>(input_ptr_fp8[i]));
+        }
+        printf("\n");
+        printf("sacle: ");
+        for (int i = 0; i < 50; i++)
+        {
+            printf("%f ", static_cast<float>(scale_ptr[i]));
+        }
+        printf("\n");
+
+        // jiangs debug
+        if (mType == nvinfer1::DataType::kHALF)
+        {
+            half input_ptr[50];
+            half output_ptr[50];
+            cudaMemcpy(input_ptr, inputs[0], 50 * sizeof(half), cudaMemcpyDeviceToHost);
+            cudaMemcpy(output_ptr, outputs[0], 50 * sizeof(half), cudaMemcpyDeviceToHost);
+            printf("FP16: \n");
+            printf("Input: ");
+            for (int i = 0; i < 50; i++)
+            {
+                printf("%f ", float(input_ptr[i]));
+            }
+            printf("\nOutput: ");
+            for (int i = 0; i < 50; i++)
+            {
+                printf("%f ", float(output_ptr[i]));
+            }
+            printf("\n");
+        }
+        else if (mType == nvinfer1::DataType::kBF16)
+        {
+            __nv_bfloat16 input_ptr[50];
+            __nv_bfloat16 output_ptr[50];
+            cudaMemcpy(input_ptr, inputs[0], 50 * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
+            cudaMemcpy(output_ptr, outputs[0], 50 * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
+            printf("BF16: \n");
+            printf("Input: ");
+            for (int i = 0; i < 50; i++)
+            {
+                printf("%f ", float(input_ptr[i]));
+            }
+            printf("\nOutput: ");
+            for (int i = 0; i < 50; i++)
+            {
+                printf("%f ", float(output_ptr[i]));
+            }
+            printf("\n");
+        }
     }
     return 0;
 }

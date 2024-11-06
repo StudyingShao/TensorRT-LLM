@@ -416,6 +416,15 @@ struct GemmFpAIntB
             params.params_scale, params.ref_scale.data(), params.ref_zero.data(),
             {scale_row_extent, params.problem_size.n()}, thread_idx, tb_offset_scale, params.group_size);
 
+        if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+        {
+            printf("C++ jiangs hacked scale = %f, %f, %f, %f\n", 
+                float(params.ref_scale.data()[0]),
+                float(params.ref_scale.data()[1]),
+                float(params.ref_scale.data()[2]),
+                float(params.ref_scale.data()[3]));
+        }
+
         // Broadcast the warp_id computed by lane 0 to ensure dependent code
         // is compiled as warp-uniform.
         int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
@@ -435,6 +444,14 @@ struct GemmFpAIntB
         {
             // Compute threadblock-scoped matrix multiply-add
             mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, iterator_scale, accumulators);
+            if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+            {
+                printf("C++ jiangs hacked accumulators = %f, %f, %f, %f\n", 
+                    float(accumulators[0]),
+                    float(accumulators[1]),
+                    float(accumulators[2]),
+                    float(accumulators[3]));
+            }
         }
 
         //

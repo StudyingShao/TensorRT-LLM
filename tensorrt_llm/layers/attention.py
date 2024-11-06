@@ -706,6 +706,11 @@ class Attention(Module):
         else:
             qkv = self.qkv(hidden_states, qkv_lora_params)
 
+        # ------------------------------------------------------
+        print("jiangs: {attn_qkv_output} register success")
+        self.register_network_output('attn_qkv_output', qkv)
+        # ------------------------------------------------------
+
         if self.clip_qkv is not None:
             qkv = clip(qkv, -self.clip_qkv, self.clip_qkv)
 
@@ -1372,6 +1377,11 @@ class Attention(Module):
         context = self.dense(context,
                              lora_runtime_params=dense_lora_params,
                              reduce_fusion_params=reduce_fusion_params)
+
+        # ------------------------------------------------------
+        print("jiangs: {attn_dense_output} register success")
+        self.register_network_output('attn_dense_output', context)
+        # ------------------------------------------------------
 
         if use_cache:
             return (context, past_key_value)
