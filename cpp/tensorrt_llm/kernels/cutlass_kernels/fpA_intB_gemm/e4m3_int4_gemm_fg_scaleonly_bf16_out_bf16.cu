@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,19 +14,22 @@
  * limitations under the License.
  */
 
-#include "tensorrt_llm/kernels/weightOnlyBatchedGemv/kernelDispatcher.h"
+#include "tensorrt_llm/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm_template.h"
 
 namespace tensorrt_llm
 {
 namespace kernels
 {
-namespace weight_only
+namespace cutlass_kernels
 {
-INSTANTIATE_WEIGHT_ONLY_CUDA_DISPATCHERS(
-    KernelType::BF16Int4Groupwise, BF16DetailsA, Int4DetailsW, ColumnMajorInterleaved, true, 64);
-// KTile=128 for Ada w4a8
-INSTANTIATE_WEIGHT_ONLY_CUDA_DISPATCHERS(
-    KernelType::BF16Int4Groupwise, BF16DetailsA, Int4DetailsW, ColumnMajorInterleaved, true, 128);
-} // namespace weight_only
+#ifdef ENABLE_FP8
+template class CutlassFpAIntBGemmRunner<__nv_fp8_e4m3,        /*Activation Type*/
+    cutlass::uint4b_t,                                        /*Weight Type*/
+    cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY, half, /*Scale and Zero Type*/
+    __nv_bfloat16,                                            /*Bias type Type*/
+    __nv_bfloat16                                             /*Output type Type*/
+    >;
+#endif
+} // namespace cutlass_kernels
 } // namespace kernels
 } // namespace tensorrt_llm
