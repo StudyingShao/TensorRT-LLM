@@ -749,6 +749,20 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
 
         enqueueContext<T, KVCacheBuffer>(enqueue_params, stream);
 
+        // printf("jiangs max_context_q_len = %d\n", int(max_context_q_len));
+
+        half host_buffer[10];
+        cudaMemcpy(host_buffer, context_buf_, 10 * sizeof(half), cudaMemcpyDeviceToHost);
+        // for (int i=0; i<10; i++)
+        // {
+        // printf("jiangs context %f, %f, %f, %f, %f\n", 
+        //     float(host_buffer[0]),
+        //     float(host_buffer[1]),
+        //     float(host_buffer[2]),
+        //     float(host_buffer[3]),
+        //     float(host_buffer[4]));
+        // }
+
         {
             std::string const afterContexStr = "ctx attention at layer " + std::to_string(mLayerIdx);
             TLLM_CHECK_DEBUG_WITH_INFO(

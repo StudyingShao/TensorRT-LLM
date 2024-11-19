@@ -145,10 +145,6 @@ class ModelRunnerCpp(ModelRunnerMixin):
         """
         extended_runtime_perf_knob_config = trtllm.ExtendedRuntimePerfKnobConfig(
         )
-
-        # jiangs
-        kv_cache_enable_block_reuse = False
-
         if multi_block_mode is not None:
             extended_runtime_perf_knob_config.multi_block_mode = multi_block_mode
         if enable_context_fmha_fp32_acc is not None:
