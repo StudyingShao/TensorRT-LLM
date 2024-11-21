@@ -80,7 +80,7 @@ public:
     WeightOnlyGroupwiseQuantMatmulPlugin() = delete;
 
     WeightOnlyGroupwiseQuantMatmulPlugin(
-        nvinfer1::DataType type, int quant_algo, int group_size, PluginProfilerPtr const& profiler);
+        nvinfer1::DataType type, int quant_algo, int group_size, float alpha, PluginProfilerPtr const& profiler);
 
     WeightOnlyGroupwiseQuantMatmulPlugin(void const* data, size_t length, PluginProfilerPtr const& profiler);
 
@@ -115,7 +115,7 @@ public:
 
 private:
     // group_size: 64, 128
-    void init(nvinfer1::DataType type, int quant_algo, int group_size);
+    void init(nvinfer1::DataType type, int quant_algo, int group_size, float alpha);
 
     void configGemm();
 
@@ -136,6 +136,8 @@ private:
     int mQuantAlgo;
 
     int mGroupSize;
+
+    float mAlpha = 1.0f;
 
     int mPreQuantScaleInputIdx;
     int mWeightInputIdx;

@@ -107,10 +107,10 @@ std::vector<WeightOnlyGroupwiseQuantGemmPluginProfiler::Config> WeightOnlyGroupw
 }
 
 WeightOnlyGroupwiseQuantMatmulPlugin::WeightOnlyGroupwiseQuantMatmulPlugin(nvinfer1::DataType type, int quant_algo,
-    int group_size, WeightOnlyGroupwiseQuantMatmulPlugin::PluginProfilerPtr const& pluginProfiler)
+    int group_size, float alpha, WeightOnlyGroupwiseQuantMatmulPlugin::PluginProfilerPtr const& pluginProfiler)
     : mPluginProfiler(pluginProfiler)
 {
-    init(type, quant_algo, group_size);
+    init(type, quant_algo, group_size, alpha);
 }
 
 // Parameterized constructor
@@ -122,12 +122,14 @@ WeightOnlyGroupwiseQuantMatmulPlugin::WeightOnlyGroupwiseQuantMatmulPlugin(
     nvinfer1::DataType type;
     int quant_algo = 0;
     int group_size = 0;
+    float alpha = 1.0f;
     read(d, type);
     read(d, quant_algo);
     read(d, group_size);
+    read(d, alpha);
     read(d, mDims);
 
-    init(type, quant_algo, group_size);
+    init(type, quant_algo, group_size, alpha);
 
     mPluginProfiler->deserialize(d, mDims, mGemmId);
 
@@ -170,7 +172,7 @@ WeightOnlyGemmRunnerPtr selectGemmRunnerForWeightType(int quant_algo)
     }
 }
 
-void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int quant_algo, int group_size)
+void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int quant_algo, int group_size, float alpha)
 {
     mArch = tensorrt_llm::common::getSMVersion();
     mType = type;
@@ -190,6 +192,8 @@ void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int qua
         // CUTLASS kernel selection
         if (quant_algo & FP8_ALPHA)
         {
+            mAlpha = alpha;
+
             // Ada & Hopper style kernels
             if (mArch < 89)
             {
@@ -225,6 +229,8 @@ void WeightOnlyGroupwiseQuantMatmulPlugin::init(nvinfer1::DataType type, int qua
         // CUTLASS kernel selection
         if (quant_algo & FP8_ALPHA)
         {
+            mAlpha = alpha;
+
             // FP8 requires at least sm89 devices
             if (mArch < 89)
             {
@@ -414,11 +420,6 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
     half const* zeros_ptr = (mQuantAlgo & ZERO) ? reinterpret_cast<half const*>(inputs[mZerosInputIdx]) : nullptr;
     half const* biases_ptr = (mQuantAlgo & BIAS) ? reinterpret_cast<half const*>(inputs[mBiasesInputIdx]) : nullptr;
     half const* act_ptr = reinterpret_cast<half const*>(inputs[0]);
-    float alpha = 1.0;
-    if (mQuantAlgo & FP8_ALPHA)
-    {
-        cudaMemcpy(&alpha, const_cast<void*>(inputs[mAlphaInputIdx]), sizeof(float), cudaMemcpyDeviceToHost);
-    }
 
     if (use_pre_quant_scale && !use_cuda_kernel)
     {
@@ -482,7 +483,7 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
         void* cuda_kernel_out_ptr = outputs[0];
         tensorrt_llm::kernels::weight_only::Params params{cuda_kernel_act_ptr, cuda_kernel_act_scale_ptr,
             cuda_kernel_weight_ptr, cuda_kernel_scales_ptr, cuda_kernel_zeros_ptr, cuda_kernel_bias_ptr,
-            cuda_kernel_out_ptr, alpha, m, real_n, k, mGroupSize, mCudaKernelType,
+            cuda_kernel_out_ptr, mAlpha, m, real_n, k, mGroupSize, mCudaKernelType,
             static_cast<bool>(mQuantAlgo & FP8_ALPHA)};
         tensorrt_llm::kernels::weight_only::kernel_launcher(mArch, params, stream);
     }
@@ -500,7 +501,7 @@ int WeightOnlyGroupwiseQuantMatmulPlugin::enqueue(nvinfer1::PluginTensorDesc con
             "the "
             "engine.)");
         m_weightOnlyGroupwiseGemmRunner->gemm(act_ptr, weight_ptr, inputs[mScalesInputIdx], zeros_ptr, biases_ptr,
-            alpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
+            mAlpha, outputs[0], m, real_n, k, mGroupSize, *bestTactic,
             reinterpret_cast<char*>(workspace) + m * k * sizeof(half), ws_bytes, stream);
     }
     return 0;
@@ -544,6 +545,7 @@ size_t WeightOnlyGroupwiseQuantMatmulPlugin::getSerializationSize() const noexce
     return sizeof(nvinfer1::DataType) +                 // mType
         sizeof(int) +                                   // mQuantAlgo
         sizeof(int) +                                   // mGroupSize
+        sizeof(float) +                                 // mAlpha
         sizeof(mDims) +                                 // Dimensions
         mPluginProfiler->getSerializationSize(mGemmId); // selected tactics container size
 }
@@ -554,6 +556,7 @@ void WeightOnlyGroupwiseQuantMatmulPlugin::serialize(void* buffer) const noexcep
     write(d, mType);
     write(d, mQuantAlgo);
     write(d, mGroupSize);
+    write(d, mAlpha);
     write(d, mDims);
 
     mPluginProfiler->serialize(d, mGemmId);
@@ -575,6 +578,7 @@ WeightOnlyGroupwiseQuantMatmulPluginCreator::WeightOnlyGroupwiseQuantMatmulPlugi
     mPluginAttributes.emplace_back(PluginField("type_id", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("quant_algo", nullptr, PluginFieldType::kINT32, 1));
     mPluginAttributes.emplace_back(PluginField("group_size", nullptr, PluginFieldType::kINT32, 1));
+    mPluginAttributes.emplace_back(PluginField("alpha", nullptr, PluginFieldType::kFLOAT32, 1));
     mFC.nbFields = mPluginAttributes.size();
     mFC.fields = mPluginAttributes.data();
 }
@@ -601,6 +605,7 @@ IPluginV2* WeightOnlyGroupwiseQuantMatmulPluginCreator::createPlugin(
     nvinfer1::DataType type;
     int QuantAlgo;
     int GroupSize;
+    float Alpha;
     // Read configurations from each fields
     for (int i = 0; i < fc->nbFields; ++i)
     {
@@ -620,13 +625,18 @@ IPluginV2* WeightOnlyGroupwiseQuantMatmulPluginCreator::createPlugin(
             TLLM_CHECK(fields[i].type == PluginFieldType::kINT32);
             type = static_cast<nvinfer1::DataType>(*(static_cast<nvinfer1::DataType const*>(fields[i].data)));
         }
+        else if (!strcmp(attrName, "alpha"))
+        {
+            TLLM_CHECK(fields[i].type == PluginFieldType::kFLOAT32);
+            Alpha = static_cast<float>(*(static_cast<float const*>(fields[i].data)));
+        }
     }
     try
     {
         // WeightOnlyGroupwiseQuantMatmulPluginCreator is unique and shared for an engine generation
         // Create plugin profiler with shared tactics map
         auto pluginProfiler = gemmPluginProfileManager.createGemmPluginProfiler(/* inference */ false);
-        auto* obj = new WeightOnlyGroupwiseQuantMatmulPlugin(type, QuantAlgo, GroupSize, pluginProfiler);
+        auto* obj = new WeightOnlyGroupwiseQuantMatmulPlugin(type, QuantAlgo, GroupSize, Alpha, pluginProfiler);
         obj->setPluginNamespace(mNamespace.c_str());
         return obj;
     }

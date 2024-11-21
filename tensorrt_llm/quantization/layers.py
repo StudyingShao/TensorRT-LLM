@@ -877,7 +877,7 @@ class WeightOnlyGroupwiseQuantLinear(Linear):
         pre_quant_scale = self.prequant_scaling_factor.value if self.prequant_scaling_factor else None
         zero = self.zero.value if self.zero else None
         bias = self.bias.value if self.bias else None
-        alpha = self.alpha.value if self.alpha else None
+        alpha = self.alpha if self.alpha else None
 
         hidden_state = x
         x = weight_only_groupwise_quant_matmul(
@@ -978,6 +978,7 @@ class WeightOnlyGroupwiseQuantRowLinear(RowLinear):
 
         if use_w4a8_awq:
             self.alpha = Parameter(shape=(1, ), dtype="float32")
+            self.activation_scaling_factor = Parameter(shape=(1, ), dtype=trt.float32)
         else:
             self.register_parameter('alpha', None)
 
@@ -996,7 +997,11 @@ class WeightOnlyGroupwiseQuantRowLinear(RowLinear):
         pre_quant_scale = self.prequant_scaling_factor.value if self.prequant_scaling_factor else None
         zero = self.zero.value if self.zero else None
         bias = self.bias.value if self.bias else None
-        alpha = self.alpha.value if self.alpha else None
+        alpha = self.alpha if self.alpha else None
+        activation_scaling_factor = self.activation_scaling_factor.value if self.activation_scaling_factor else None
+
+        if self.alpha and x.dtype == trt.fp8:
+            x =  dequantize(x, activation_scaling_factor, -1, self.dtype)
 
         hidden_state = x
         x = weight_only_groupwise_quant_matmul(
