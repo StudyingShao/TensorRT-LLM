@@ -1025,6 +1025,9 @@ def fuse_gate_mlp(
             fc_name = name + '.fc'
             layer_quant_cfg = model.config.get_quant_cfg(fc_name)
             layer_quant_algo = layer_quant_cfg.quant_algo
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            layer_quant_algo = QuantAlgo.FP8
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             if layer_quant_algo != QuantAlgo.FP8 and layer_quant_algo is not None:
                 continue
 

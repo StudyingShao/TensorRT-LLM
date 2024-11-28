@@ -27,6 +27,7 @@ from ...module import Module
 from ...plugin import init_all_reduce_helper
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               PretrainedConfig)
+from ...quantization import QuantMode
 from .convert import convert_deepseekv2, create_trt_config_from_hf
 
 
@@ -102,6 +103,9 @@ class DeepseekV2DecoderLayer(Module):
                 ClsMLP = SharedMoE
                 mlp_kwargs['use_shared_gate'] = False
                 mlp_kwargs['use_side_stream'] = False
+                # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                mlp_kwargs['quant_mode'] = QuantMode.FP8_QDQ
+                # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
             else:
                 ClsMLP = MOE
         else:
@@ -110,6 +114,9 @@ class DeepseekV2DecoderLayer(Module):
             hidden_act = non_gated_version(
                 config.hidden_act)  # back to non gated for dense layers
             mlp_kwargs = {}
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            mlp_kwargs['quant_mode'] = QuantMode.FP8_QDQ
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
         self.mlp = ClsMLP(hidden_size=config.hidden_size,
                           ffn_hidden_size=mlp_hidden_size,
@@ -243,6 +250,7 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
     def from_hugging_face(cls,
                           hf_model,
                           model_dir,
+                          fp8_model_dir,
                           dtype: str = 'auto',
                           mapping: Optional[Mapping] = None,
                           override_fields={},
@@ -277,6 +285,7 @@ class DeepseekV2ForCausalLM(DecoderModelForCausalLM):
             hf_model,
             config,
             mapping,
+            fp8_model_dir=fp8_model_dir,
             dtype=dtype,
             use_parallel_embedding=config.get('use_parallel_embedding', False),
             sharding_dim=config.get('embedding_sharding_dim', 0),

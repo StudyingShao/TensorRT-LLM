@@ -29,6 +29,7 @@ from tensorrt_llm.models.deepseek_v2.convert import load_hf_deepseek
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_dir', type=str, default=None, required=True)
+    parser.add_argument('--fp8_model_dir', type=str, default=None, required=True)
     parser.add_argument('--tp_size',
                         type=int,
                         default=1,
@@ -183,7 +184,7 @@ def convert_and_save_hf(args):
                           moe_ep_size=args.moe_ep_size)
 
         deepseekv2 = DeepseekV2ForCausalLM.from_hugging_face(
-            hf_model, args.model_dir, args.dtype, mapping, **override_fields)
+            hf_model, args.model_dir, args.fp8_model_dir, args.dtype, mapping, **override_fields)
         deepseekv2.save_checkpoint(args.output_dir, save_config=(rank == 0))
         del deepseekv2
 

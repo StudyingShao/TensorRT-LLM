@@ -185,16 +185,21 @@ def load_hf_deepseek(model_dir, load_model_on_cpu=False):
                 max_memory=max_memory,
                 torch_dtype='auto',
                 trust_remote_code=True)
-        elif torch.cuda.get_device_properties(0).total_memory >= 90000000000:
+        # elif torch.cuda.get_device_properties(0).total_memory >= 90000000000:
+        #     model = AutoModelForCausalLM.from_pretrained(model_dir,
+        #                                                  config=hf_config,
+        #                                                  device_map='auto',
+        #                                                  torch_dtype='auto',
+        #                                                  trust_remote_code=True)
+        else:
             model = AutoModelForCausalLM.from_pretrained(model_dir,
                                                          config=hf_config,
                                                          device_map='auto',
                                                          torch_dtype='auto',
                                                          trust_remote_code=True)
-        else:
-            assert torch.cuda.get_device_properties(
-                0
-            ).total_memory >= 80000000000, "deepseek v2 loading requires per GPU memory above 80G"
+            # assert torch.cuda.get_device_properties(
+            #     0
+            # ).total_memory >= 80000000000, "deepseek v2 loading requires per GPU memory above 80G"
 
     return model
 
@@ -229,6 +234,7 @@ def get_param_weight(weight, prefix):
 def convert_deepseekv2(hf_model,
                        config,
                        mapping,
+                       fp8_model_dir,
                        dtype='float32',
                        use_parallel_embedding=False,
                        sharding_dim=0,
@@ -251,6 +257,19 @@ def convert_deepseekv2(hf_model,
     )
 
     layers_range = mapping.pp_layers(config['num_hidden_layers'])
+
+    import os
+    from safetensors import safe_open
+
+    fp8_weights = {}
+    if fp8_model_dir:
+        for root, dirs, files in os.walk(fp8_model_dir):
+            for file in files:
+                if file.endswith('.safetensors'):
+                    fp8_ckpt_path = os.path.join(root, file)
+                    with safe_open(fp8_ckpt_path, framework="pt", device="cpu") as fp8_ckpt:
+                        for key in fp8_ckpt.keys():
+                            fp8_weights[key] = fp8_ckpt.get_tensor(key)
 
     def convert_layer(l):
         prefix = f'model.layers.{l}.'
@@ -404,21 +423,87 @@ def convert_deepseekv2(hf_model,
                 get_tllm_linear_weight(q_a_layernorm_weight, trtllm_prex +
                                        'attention.q_a_layernorm.'))
 
+        mlp_dtype_ = torch.float8_e4m3fn if fp8_model_dir else dtype
+        mlp_model_params_ = fp8_weights if fp8_model_dir else model_params
+
+        def update_fp8_tensors(HF_prefix, TLLM_prefix):
+            act_scale = get_weight(fp8_weights, HF_prefix,
+                            dtype=torch.float32, postfix='.input_scale').max()
+            weight_scale = get_weight(fp8_weights, HF_prefix,
+                            dtype=torch.float32, postfix='.weight_scale')
+            
+            if weight_scale.dim() != 0:
+                weight_scale = weight_scale.unsqueeze(1)
+
+            weights.update(
+                get_tllm_linear_weight(act_scale, TLLM_prefix,
+                            postfix='activation_scaling_factor'))
+            weights.update(
+                get_tllm_linear_weight(weight_scale, TLLM_prefix,
+                            postfix='weights_scaling_factor'))
+
         if moe_config.has_moe() and l > 0:
             rank_experts = list(range(moe_config.num_experts))
             if mapping.has_moe_ep():
                 rank_experts = mapping.ep_experts(moe_config.num_experts)
-            for suffix in ["gate_proj", "down_proj", "up_proj"]:
-                model_params[f'model.layers.{l}.mlp.experts.{suffix}.weight'] = \
-                torch.stack([model_params[f'model.layers.{l}.mlp.experts.{expert}.{suffix}.weight'].detach().cpu()
-                            for expert in rank_experts])
+            
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<            
+            if fp8_model_dir:
+                moe_experts_up_proj_act_scale = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.up_proj.input_scale'].detach().cpu()
+                                for expert in rank_experts]).to(torch.float32).max()
+                moe_experts_gate_proj_act_scale = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.gate_proj.input_scale'].detach().cpu()
+                                for expert in rank_experts]).to(torch.float32).max()
+                moe_experts_up_gate_proj_act_scale = torch.max(moe_experts_up_proj_act_scale, moe_experts_gate_proj_act_scale)
 
-            gate_proj = model_params[
-                f'model.layers.{l}.mlp.experts.gate_proj.weight']
-            down_proj = model_params[
-                f'model.layers.{l}.mlp.experts.down_proj.weight']
-            up_proj = model_params[
-                f'model.layers.{l}.mlp.experts.up_proj.weight']
+                moe_experts_up_proj_weight_scale = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.up_proj.weight_scale'].detach().cpu()
+                                for expert in rank_experts]).to(torch.float32)
+                moe_experts_gate_proj_weight_scale = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.gate_proj.weight_scale'].detach().cpu()
+                                for expert in rank_experts]).to(torch.float32)
+                moe_experts_up_gate_proj_weight_scale = torch.max(moe_experts_up_proj_weight_scale, moe_experts_gate_proj_weight_scale)
+
+                weights.update(
+                        get_tllm_linear_weight(moe_experts_up_gate_proj_act_scale, trtllm_prex + 'mlp.fc.',
+                                    postfix='activation_scaling_factor'))
+                weights.update(
+                        get_tllm_linear_weight(moe_experts_up_gate_proj_weight_scale.unsqueeze(1), trtllm_prex + 'mlp.fc.',
+                                    postfix='weights_scaling_factor'))
+                
+                fp8_weights[f'model.layers.{l}.mlp.experts.down_proj.input_scale'] = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.down_proj.input_scale'].detach().cpu()
+                            for expert in rank_experts])
+                fp8_weights[f'model.layers.{l}.mlp.experts.down_proj.weight_scale'] = \
+                    torch.stack([fp8_weights[f'model.layers.{l}.mlp.experts.{expert}.down_proj.weight_scale'].detach().cpu()
+                            for expert in rank_experts])
+                update_fp8_tensors(prefix + 'mlp.experts.down_proj', trtllm_prex + 'mlp.proj.')
+
+            up_proj_weight_list = []
+            gate_proj_weight_list = []
+            down_proj_weight_list = []
+
+            for expert in rank_experts:                
+                up_proj_weight = mlp_model_params_[f'model.layers.{l}.mlp.experts.{expert}.up_proj.weight'].detach().cpu()
+                gate_proj_weight = mlp_model_params_[f'model.layers.{l}.mlp.experts.{expert}.gate_proj.weight'].detach().cpu()
+                down_proj_weight = mlp_model_params_[f'model.layers.{l}.mlp.experts.{expert}.down_proj.weight'].detach().cpu()
+
+                if fp8_model_dir:
+                    up_proj_weight = (up_proj_weight.to(torch.float32) * moe_experts_up_proj_weight_scale[expert] / 
+                                      moe_experts_up_gate_proj_weight_scale[expert]).to(mlp_dtype_)
+                    gate_proj_weight = (gate_proj_weight.to(torch.float32) * moe_experts_gate_proj_weight_scale[expert] / 
+                                        moe_experts_up_gate_proj_weight_scale[expert]).to(mlp_dtype_)
+
+                up_proj_weight_list.append(up_proj_weight)
+                gate_proj_weight_list.append(gate_proj_weight)
+                down_proj_weight_list.append(down_proj_weight)
+            
+            up_proj = torch.stack(up_proj_weight_list)
+            gate_proj = torch.stack(gate_proj_weight_list)
+            down_proj = torch.stack(down_proj_weight_list)
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<            
+
             if mapping.has_moe_tp():
                 gate_proj = split(gate_proj,
                                   mapping.tp_size,
@@ -433,23 +518,13 @@ def convert_deepseekv2(hf_model,
                                 mapping.tp_rank,
                                 dim=1)
 
-            model_params[
-                f'model.layers.{l}.mlp.experts.up_gate_proj.weight'] = torch.concat(
-                    [up_proj, gate_proj], dim=-2)
-            model_params[
-                f'model.layers.{l}.mlp.experts.down_proj.weight'] = down_proj
-
             ## mlp.experts.down_proj.weight
-            moe_experts_down_proj_weights = get_weight(
-                model_params, prefix + 'mlp.experts.down_proj', dtype)
             weights.update(
-                get_tllm_linear_weight(moe_experts_down_proj_weights,
+                get_tllm_linear_weight(down_proj,
                                        trtllm_prex + 'mlp.proj.'))
             ## mlp.experts.up_gate.weight
-            moe_experts_up_gate_proj_weights = get_weight(
-                model_params, prefix + 'mlp.experts.up_gate_proj', dtype)
             weights.update(
-                get_tllm_linear_weight(moe_experts_up_gate_proj_weights,
+                get_tllm_linear_weight(torch.concat([up_proj, gate_proj], dim=-2),
                                        trtllm_prex + 'mlp.fc.'))
             ## MOE hardcoded routing_input into trt.float32, please refer to moe.py line 397
             moe_experts_gate_weights = get_weight(model_params,
@@ -461,28 +536,57 @@ def convert_deepseekv2(hf_model,
 
             if moe_config.shared_expert_intermediate_size > 0:
                 shared_moe_up_proj_weights = get_weight(
-                    model_params, prefix + 'mlp.shared_experts.up_proj', dtype)
+                    mlp_model_params_, prefix + 'mlp.shared_experts.up_proj', 
+                    mlp_dtype_)
                 shared_moe_up_proj_weights = split_matrix_tp(
                     shared_moe_up_proj_weights,
                     mapping.tp_size,
                     mapping.tp_rank,
                     dim=0)
                 shared_moe_down_proj_weights = get_weight(
-                    model_params, prefix + 'mlp.shared_experts.down_proj',
-                    dtype)
+                    mlp_model_params_, prefix + 'mlp.shared_experts.down_proj',
+                    mlp_dtype_)
                 shared_moe_down_proj_weights = split_matrix_tp(
                     shared_moe_down_proj_weights,
                     mapping.tp_size,
                     mapping.tp_rank,
                     dim=1)
                 shared_moe_gate_proj_weights = get_weight(
-                    model_params, prefix + 'mlp.shared_experts.gate_proj',
-                    dtype)
+                    mlp_model_params_, prefix + 'mlp.shared_experts.gate_proj',
+                    mlp_dtype_)
                 shared_moe_gate_proj_weights = split_matrix_tp(
                     shared_moe_gate_proj_weights,
                     mapping.tp_size,
                     mapping.tp_rank,
                     dim=0)
+
+                if fp8_model_dir:
+                    shared_moe_up_proj_act_scale = get_weight(fp8_weights, prefix + 'mlp.shared_experts.up_proj',
+                                dtype=torch.float32, postfix='.input_scale')
+                    shared_moe_gate_proj_act_scale = get_weight(fp8_weights, prefix + 'mlp.shared_experts.gate_proj',
+                                dtype=torch.float32, postfix='.input_scale')
+                    shared_moe_up_proj_weight_scale = get_weight(fp8_weights, prefix + 'mlp.shared_experts.up_proj',
+                                dtype=torch.float32, postfix='.weight_scale')
+                    shared_moe_gate_proj_weight_scale = get_weight(fp8_weights, prefix + 'mlp.shared_experts.gate_proj',
+                                dtype=torch.float32, postfix='.weight_scale')
+
+                    shared_moe_up_gate_proj_act_scale = torch.max(shared_moe_up_proj_act_scale, shared_moe_gate_proj_act_scale)
+                    shared_moe_up_gate_proj_weight_scale = torch.max(shared_moe_up_proj_weight_scale, shared_moe_gate_proj_weight_scale)
+
+                    shared_moe_up_proj_weights = (shared_moe_up_proj_weights.to(torch.float32) * shared_moe_up_proj_weight_scale 
+                                                  / shared_moe_up_gate_proj_weight_scale).to(mlp_dtype_)
+                    shared_moe_gate_proj_weights = (shared_moe_gate_proj_weights.to(torch.float32) * shared_moe_gate_proj_weight_scale 
+                                                    / shared_moe_up_gate_proj_weight_scale).to(mlp_dtype_)
+
+                    weights.update(
+                        get_tllm_linear_weight(shared_moe_up_gate_proj_act_scale, trtllm_prex + 'mlp.shared_expert.fc.',
+                                    postfix='activation_scaling_factor'))
+                    weights.update(
+                        get_tllm_linear_weight(shared_moe_up_gate_proj_weight_scale, trtllm_prex + 'mlp.shared_expert.fc.',
+                                    postfix='weights_scaling_factor'))
+                    
+                    update_fp8_tensors(prefix + 'mlp.shared_experts.down_proj', trtllm_prex + 'mlp.shared_expert.proj.')
+
                 shared_moe_gate_up_proj_weights = torch.concat(
                     [shared_moe_up_proj_weights, shared_moe_gate_proj_weights],
                     dim=-2)
@@ -501,8 +605,8 @@ def convert_deepseekv2(hf_model,
 
         else:
             ## Current MLP layer is only one, if it goes large consider to do fuse
-            mlp_gate_weight = get_weight(model_params, prefix + 'mlp.up_proj',
-                                         dtype)
+            mlp_gate_weight = get_weight(mlp_model_params_, prefix + 'mlp.up_proj',
+                                         mlp_dtype_)
             split_gate = split_matrix_tp(mlp_gate_weight,
                                          mapping.tp_size,
                                          mapping.tp_rank,
@@ -510,8 +614,8 @@ def convert_deepseekv2(hf_model,
             weights.update(
                 get_tllm_linear_weight(split_gate, trtllm_prex + 'mlp.gate.'))
 
-            mlp_fc_weight = get_weight(model_params, prefix + 'mlp.gate_proj',
-                                       dtype)
+            mlp_fc_weight = get_weight(mlp_model_params_, prefix + 'mlp.gate_proj',
+                                       mlp_dtype_)
             split_fc = split_matrix_tp(mlp_fc_weight,
                                        mapping.tp_size,
                                        mapping.tp_rank,
@@ -519,14 +623,19 @@ def convert_deepseekv2(hf_model,
             weights.update(
                 get_tllm_linear_weight(split_fc, trtllm_prex + 'mlp.fc.'))
 
-            mlp_proj_weight = get_weight(model_params, prefix + 'mlp.down_proj',
-                                         dtype)
+            mlp_proj_weight = get_weight(mlp_model_params_, prefix + 'mlp.down_proj',
+                                         mlp_dtype_)
             split_proj = split_matrix_tp(mlp_proj_weight,
                                          mapping.tp_size,
                                          mapping.tp_rank,
                                          dim=1)
             weights.update(
                 get_tllm_linear_weight(split_proj, trtllm_prex + 'mlp.proj.'))
+
+            if fp8_model_dir:
+                update_fp8_tensors(prefix + 'mlp.up_proj', trtllm_prex + 'mlp.gate.')
+                update_fp8_tensors(prefix + 'mlp.gate_proj', trtllm_prex + 'mlp.fc.')
+                update_fp8_tensors(prefix + 'mlp.down_proj', trtllm_prex + 'mlp.proj.')
 
         # Layer norms do not use tensor parallelism
         input_ln_weight = get_weight(model_params, prefix + 'input_layernorm',

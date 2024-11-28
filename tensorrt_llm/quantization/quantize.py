@@ -80,7 +80,11 @@ def quantize_layers(
             else:
                 model = quant_layer
 
-    setattr(model, 'quant_mode', quant_config.quant_mode)
+    if isinstance(model, MixtureOfExperts) or \
+        isinstance(model, GatedMLP):
+        setattr(model, 'quant_mode', QuantMode.FP8_QDQ)
+    else:
+        setattr(model, 'quant_mode', quant_config.quant_mode)
     return model
 
 
@@ -211,7 +215,7 @@ def smooth_quantize(model, quant_config: QuantConfig):
 
 
 def fp8_quantize(model, quant_config: QuantConfig):
-    assert quant_config.quant_mode.has_fp8_qdq()
+    # assert quant_config.quant_mode.has_fp8_qdq()
 
     quant_map = {
         ColumnLinear: FP8Linear,
@@ -538,6 +542,10 @@ def quantize(model, quant_config: Union[QuantConfig, LayerQuantConfig]):
                 continue
         else:
             layer_quant_mode = quant_mode
+        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        if 'mlp' in name and 'router' not in name:
+            layer_quant_mode = QuantMode.FP8_QDQ
+        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         if layer_quant_mode == QuantMode(0):
             continue
 
