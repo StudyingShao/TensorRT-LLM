@@ -162,13 +162,45 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
                            n,
                            dtype=activation_dtype,
                            device="cuda") / 100
+
+        # activation = torch.ones_like(activation)
+        # # activation = torch.zeros_like(activation)
+        # scale = torch.ones_like(scale) / 100
+        
+
+        # print("scale:", scale.device)
+        # print("zero:", zero.shape)
+        # print("activation:", activation.shape)
+        # activation: torch.Size([5, 512])
+        # zero: torch.Size([4, 64])
+        # scale: torch.Size([4, 64])
+
         zero = None
         if has_zero:
             zero_uint4 = torch.randint(0, 7, (total_groups, n), dtype=torch.int32, device="cuda") 
             zero = zero_uint4.to(dtype=activation_dtype)
             zero = zero * scale
+            # zero = torch.zeros_like(zero)
 
-        # scale = torch.ones_like(scale)
+        # # shape (m, k)
+        # for i in range(activation.shape[0]):
+        #     # m
+        #     for j in range(activation.shape[1]):
+        #         # k
+        #         activation[i, j] = i * 1000 + j / 10
+
+        # # shape (k/gs, n)
+        # for i in range(scale.shape[1]):
+        #     # n
+        #     for j in range(scale.shape[0]):
+        #         # k
+        #         scale[j, i] = i # n
+        #         zero[j, i] = j * 128 # k
+        # print("scale--------------------------------------------")
+        # print(scale)
+        # print("zero--------------------------------------------")
+        # print(zero)
+
         pre_quant_scale = torch.rand(1,
                                      k,
                                      dtype=activation_dtype,
@@ -190,22 +222,123 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
                                                (k, n // num_weights_in_32_bits),
                                                dtype=torch.int32,
                                                device="cuda")
+        # unprocessed_int_weight = torch.zeros_like(unprocessed_int_weight)
+
+        # print("unprocessed_int_weight--------------------------------------------")
+        # print(unprocessed_int_weight.shape)
+        # print("unprocessed_int_weight--------------------------------------------")
 
         preprocessor = torch.ops.trtllm.preprocess_weights_for_mixed_gemm
         # Weights must be a CPU Tensor
         unpacker = torch.ops.trtllm.unpack_int4_packed_tensor_to_int8
 
-        unprocessed_weight = unprocessed_int_weight.view(torch.int8)
+        unprocessed_weight = unprocessed_int_weight.view(torch.uint8)
+
+
+        # def split_int8_to_int4(byte):
+        #     high_nibble = (byte >> 4) & 0x0F  # 提取高4位
+        #     low_nibble = byte & 0x0F           # 提取低4位
+        #     return high_nibble, low_nibble
+
+        # torch.Size([512, 32])
+
+        ####################################################################################################
+        # unprocessed_weight = torch.ones_like(unprocessed_weight) * (9 * 16 + 9)
+        
+        # for j in range(unprocessed_weight.shape[1]): # n
+        #     if j < 32:   # n = 0~63
+        #         for i in range(0, unprocessed_weight.shape[0]): # k
+        #             low = i // 512 + 8
+        #             unprocessed_weight[i, j] = low * 16 + low
+        #     elif j < 64: # n = 64~128
+        #         for i in range(0, unprocessed_weight.shape[0]): # k
+        #             low = i // 512
+        #             unprocessed_weight[i, j] = low * 16 + low
+
+        # print("unprocessed_weight--------------------------------------------")
+        # print(unprocessed_weight.dtype)
+        # print(unprocessed_weight.shape)
+        # # print(unprocessed_weight)
+        # for nn in [0, 32, 64, 96]:
+        #     print(f"n{nn}:", end='')
+        #     for kk in range(unprocessed_weight.shape[0]):
+        #         print(f"[k{kk} {unprocessed_weight[kk, nn]}]", end='')
+        #     print()
+
+
+        # for i in range(unprocessed_weight.shape[0]): # k
+        #     if i >= 128 and i < 256:
+        #         for j in range(0, unprocessed_weight.shape[1]): # n
+        #             low = 15
+        #             unprocessed_weight[i, j] = low * 16 + low
+        #     else:
+        #         for j in range(0, unprocessed_weight.shape[1]):
+        #             low = ((j // 2) + 8) % 16
+        #             unprocessed_weight[i, j] = low * 16 + low
+
+        # for i in range(unprocessed_weight.shape[0]): # k
+        #     # for j in range(0, unprocessed_weight.shape[1]):
+        #     # for j in range(0, unprocessed_weight.shape[1]):
+        #     #     unprocessed_weight[i, j] = (j % 16) * 17
+        #     if i < 64:
+        #         for j in range(0, 8):
+        #             high = 2 * j + 1
+        #             low = 2 * j
+        #             unprocessed_weight[i, j] = high * 16 + low
+
+        # for i in range(unprocessed_weight.shape[0]): # k
+        #     # for j in range(0, unprocessed_weight.shape[1]):
+        #     # for j in range(0, unprocessed_weight.shape[1]):
+        #     #     unprocessed_weight[i, j] = (j % 16) * 17
+        #     # if i < 256:
+        #     debug = i // 64
+        #     for j in range(0, 4):
+        #         high = (2 * j + 8 + debug) % 16
+        #         low = (2 * j + debug) % 16
+        #         unprocessed_weight[i, j] = high * 16 + low
+
+        # for i in range(unprocessed_weight.shape[0]):
+        # # for i in range(21):
+        #     print(i, ": ", end='')
+        #     for j in range(0, unprocessed_weight.shape[1]):
+        #     # for j in range(20):
+        #         high, low = split_int8_to_int4(unprocessed_weight[i, j].item())
+        #         print(f"{low}, {high}", end=', ')
+        #     print()
+        ####################################################################################################
+
+
+
         # Weights must be a CPU Tensor
-        ref_q_weight = unpacker(unprocessed_weight.cpu())
+        ref_q_weight = unpacker(unprocessed_weight.cpu().view(torch.int8))
         if use_w4a8_awq:
             activation_type = torch.float8_e4m3fn
         else:
             activation_type = torch.float16
         # Weights must be a CPU Tensor
-        cuda_q_weight = preprocessor(unprocessed_weight.cpu(),
+        cuda_q_weight = preprocessor(unprocessed_weight.cpu().view(torch.int8),
                                      quantized_weight_dtype,
                                      activation_type).view(activation_dtype)
+
+        # print(cuda_q_weight.shape)
+        # torch.Size([512, 16]) 4xint4->fp16
+        # n = 64, k = 512
+
+        # cuda_q_weight = cuda_q_weight.view(torch.int8).T
+
+
+        # cuda_q_debug = cuda_q_weight.view(torch.uint8)
+        # print(cuda_q_debug)
+        # print(cuda_q_debug.shape)
+        # for i in range(cuda_q_debug.shape[0]):
+        # # for i in range(33):
+        #     print(i, ": ", end='')
+        #     for j in range(0, cuda_q_debug.shape[1]):
+        #     # for j in range(20):
+        #         high, low = split_int8_to_int4(cuda_q_debug[i, j].item())
+        #         print(f"[{j}] {low}, {high}", end=', ')
+        #     print()
+
 
         # Flags for indicating whether the corresponding inputs are applied in quant_algo
         BIAS = 1
@@ -221,12 +354,14 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
         if has_zero:
             zero_ref = zero.repeat_interleave(group_size, dim=0)[:k, :]
             ref_th_weight += zero_ref
+            # zero.shape: torch.Size([32, 8192]) k 4096/128, n 8192
+            # for convert_new
+            # zero -= 1032 * scale
+            # for convert_new2
+            zero -= 72 * scale
 
-        # zero.shape: torch.Size([32, 8192]) k 4096/128, n 8192
-        # for convert_new
-        # zero -= 1032 * scale
-        # for convert_new2
-        zero -= 72 * scale
+        # print("scale:", scale.shape, scale.device)
+        # print(scale)
 
         output = self._run_matmul_plugin(activation, pre_quant_scale,
                                          cuda_q_weight.cuda(), scale, zero,
@@ -242,8 +377,31 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
 
         ref = _utils.woq_groupwise_gt_matmul(activation, ref_th_weight, bias)
 
-        for i in range(500):
-            print(f"{ref[0, i]}, {output[0, i]}")
+        # print("activation-----------------------------------------------------------")
+        # print(activation)
+        # print("ref_th_weight-----------------------------------------------------------")
+        # print(ref_th_weight)
+
+        # print(output.shape)
+        # [5, 64]
+
+        # print(f"m{m} n{n} {ref[0, i]}, {output[0, i]}")
+
+        if False:
+            n_print = 30
+            print("cutlass ------------------------------------------------------")
+            for mm in range(m):
+                print(f"m{mm}: ", end='')
+                for nn in range(n_print):
+                    print(f"n{nn} {output[mm, nn]} ", end='')
+                print()
+            print("ref ------------------------------------------------------")
+            for mm in range(m):
+                print(f"m{mm}: ", end='')
+                for nn in range(n_print):
+                    print(f"n{nn} {ref[mm, nn]} ", end='')
+                print()
+        
         _utils.woq_assert_near_eq(ref, output, 2)
 
     @parameterized.expand(
@@ -411,13 +569,20 @@ def jiangs_single_test():
     torch.manual_seed(0)
     test = TestWeightOnlyGroupWiseQuantMatmul()
 
+    # m = 10
+    # n = 8192
+    # k = 4096
+    # m = 5
+    # n = 64
+    # k = 512
     m = 10
+    # n = 64 * 108 + 128
     n = 8192
     k = 4096
     dtype = 'float16'
     has_pre_quant = False
     has_zero = True
-    has_bias = False
+    has_bias = True
     group_size=128
 
     test._woq_groupwise_matmul(

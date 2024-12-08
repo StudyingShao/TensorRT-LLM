@@ -22,6 +22,7 @@
 #include "cutlass/gemm/kernel/default_gemm.h"
 #include "cutlass_extensions/compute_occupancy.h"
 #include "cutlass_extensions/gemm/device/gemm_universal_base_compat.h"
+#include "cutlass/gemm/device/gemm_universal.h"
 
 #include "cutlass_extensions/epilogue_helpers.h"
 #include "cutlass_extensions/gemm/kernel/default_fpA_intB_traits.h"
@@ -94,8 +95,8 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         = cutlass::gemm::kernel::MixedGemmArchTraits<CutlassActivationType, CutlassWeightType, arch>;
     using ElementAccumulator = typename MixedGemmArchTraits::AccType;
 
-    // constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<CutlassOutputType>::value;
-    constexpr int ElementsPerAccessC = 64 / cutlass::sizeof_bits<CutlassOutputType>::value;
+    constexpr int ElementsPerAccessC = 128 / cutlass::sizeof_bits<CutlassOutputType>::value;
+    // constexpr int ElementsPerAccessC = 64 / cutlass::sizeof_bits<CutlassOutputType>::value;
     using EpilogueOp =
         typename tkc::Epilogue<CutlassOutputType, ElementsPerAccessC, ElementAccumulator, EpilogueTag>::Op;
 
@@ -118,6 +119,21 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         typename GemmKernel_::ThreadblockSwizzle,
         arch, // Ensure top level arch is used for dispatch
         GemmKernel_::kSplitKSerial>;
+
+    using DeviceGemmStreamK = cutlass::gemm::device::GemmUniversal<
+        CutlassActivationType, cutlass::layout::RowMajor,                               // ElementA, LayoutA,
+        CutlassWeightType, typename MixedGemmArchTraits::LayoutB,                       // ElementB, LayoutB,
+        CutlassOutputType, cutlass::layout::RowMajor,                                   // ElementC, LayoutC,
+        ElementAccumulator,
+        cutlass::arch::OpClassTensorOp,                                                 // OperatorClass,
+        arch,                                                                           // ArchTag,
+        ThreadblockShape, WarpShape, typename MixedGemmArchTraits::InstructionShape,    // InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
+        EpilogueOp,
+        cutlass::gemm::threadblock::ThreadblockSwizzleStreamK,                          // <-- Only difference
+        Stages,                                                                         // NumStages,
+        MixedGemmArchTraits::ElementsPerAccessA,                                        // AlignmentA, 128 / cutlass::sizeof_bits<TypeA>::value;
+        MixedGemmArchTraits::ElementsPerAccessB,                                        // AlignmentB, 128 / cutlass::sizeof_bits<TypeB>::value;
+        TaggedOperator>;
 
     if (occupancy != nullptr)
     {
@@ -191,6 +207,30 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         {reinterpret_cast<CutlassOutputType*>(C), n}, gemm_config.split_k_factor,
         {ElementAccumulator(alpha), output_op_beta});
 
+    int multi_processor_count_ = -1;
+
+    typename DeviceGemmStreamK::Arguments streamK_args(
+        cutlass::gemm::GemmUniversalMode::kGemm,                                    // universal mode
+        {m, n, k},                                                                  // problem_size
+        gemm_config.split_k_factor,                                                 // batch count or splitk slices
+        {ElementAccumulator(alpha), output_op_beta},                                // epilogue parameters
+        group_size,
+        {reinterpret_cast<CutlassScaleZeroType*>(const_cast<ScaleZeroType*>(weight_scales)), ld_scale_zero},
+        {reinterpret_cast<CutlassScaleZeroType*>(const_cast<ScaleZeroType*>(weight_zero_points)), ld_scale_zero},
+        reinterpret_cast<CutlassActivationType*>(const_cast<ActivationType*>(A)),   // ptr_A
+        reinterpret_cast<CutlassWeightType*>(const_cast<WeightType*>(B)),           // ptr_B
+        reinterpret_cast<CutlassBiasType*>(const_cast<BiasType*>(biases)),          // ptr_C
+        reinterpret_cast<CutlassOutputType*>(C),                                    // ptr_D
+        m * k,                                                                      // batch_stride_A
+        n * k,                                                                      // batch_stride_B
+        1 * n,                                                                      // batch_stride_C
+        m * n,                                                                      // batch_stride_D
+        k,                                                                          // stride_a
+        ldb,                                                                        // stride_b
+        0,                                                                          // stride_c
+        n,                                                                          // stride_d
+        multi_processor_count_);                                                    // avail_sms
+
     // This assertion is enabled because because for the column interleaved layout, K MUST be a multiple of
     // threadblockK. The reason for this is that the default pitchlinear iterators are used to handle walking over the
     // interleaved matrix. The way masking in handled in these do not map to the interleaved layout. We need to write
@@ -202,38 +242,63 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
         throw std::runtime_error("Temp assertion: k must be multiple of threadblockK");
     }
 
-    Gemm gemm;
-    if (gemm.get_workspace_size(args) > workspace_bytes)
-    {
-        TLLM_LOG_WARNING(
-            "Requested split-k but workspace size insufficient. Falling back to non-split-k implementation.");
-        // If requested split-k factor will require more workspace bytes, revert to standard gemm.
-        args.batch_count = 1;
-    }
-
-    auto can_implement = gemm.can_implement(args);
-    if (can_implement != cutlass::Status::kSuccess)
+    DeviceGemmStreamK streamK_gemm;
+    // size_t streamK_workspace_size = streamK_gemm.get_workspace_size(streamK_args);
+    auto streamK_can_implement = streamK_gemm.can_implement(streamK_args);
+    if (streamK_can_implement != cutlass::Status::kSuccess)
     {
         std::string err_msg = "fpA_intB cutlass kernel will fail for params. Error: "
-            + std::string(cutlassGetStatusString(can_implement));
+            + std::string(cutlassGetStatusString(streamK_can_implement));
+        throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
+    }
+    auto streamK_init_status = streamK_gemm.initialize(streamK_args, workspace, stream);
+    if (streamK_init_status != cutlass::Status::kSuccess)
+    {
+        std::string err_msg
+            = "Failed to initialize cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(streamK_init_status));
+        throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
+    }
+    auto streamK_run_status = streamK_gemm.run(stream);
+    if (streamK_run_status != cutlass::Status::kSuccess)
+    {
+        std::string err_msg
+            = "Failed to run cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(streamK_run_status));
         throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
     }
 
-    auto init_status = gemm.initialize(args, workspace, stream);
-    if (init_status != cutlass::Status::kSuccess)
-    {
-        std::string err_msg
-            = "Failed to initialize cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(init_status));
-        throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
-    }
+    // -----------------------------------------------------------------------------------------------------------------------
+    // Gemm gemm;
+    // if (gemm.get_workspace_size(args) > workspace_bytes)
+    // {
+    //     TLLM_LOG_WARNING(
+    //         "Requested split-k but workspace size insufficient. Falling back to non-split-k implementation.");
+    //     // If requested split-k factor will require more workspace bytes, revert to standard gemm.
+    //     args.batch_count = 1;
+    // }
 
-    auto run_status = gemm.run(stream);
-    if (run_status != cutlass::Status::kSuccess)
-    {
-        std::string err_msg
-            = "Failed to run cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(run_status));
-        throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
-    }
+    // auto can_implement = gemm.can_implement(args);
+    // if (can_implement != cutlass::Status::kSuccess)
+    // {
+    //     std::string err_msg = "fpA_intB cutlass kernel will fail for params. Error: "
+    //         + std::string(cutlassGetStatusString(can_implement));
+    //     throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
+    // }
+
+    // auto init_status = gemm.initialize(args, workspace, stream);
+    // if (init_status != cutlass::Status::kSuccess)
+    // {
+    //     std::string err_msg
+    //         = "Failed to initialize cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(init_status));
+    //     throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
+    // }
+
+    // auto run_status = gemm.run(stream);
+    // if (run_status != cutlass::Status::kSuccess)
+    // {
+    //     std::string err_msg
+    //         = "Failed to run cutlass fpA_intB gemm. Error: " + std::string(cutlassGetStatusString(run_status));
+    //     throw std::runtime_error("[TensorRT-LLm Error][fpA_intB Runner] " + err_msg);
+    // }
 }
 
 // This filters out invalid template combinations that we DON'T want instantiated in CUTLASS. For example,
@@ -350,15 +415,10 @@ void dispatch_gemm_to_cutlass(ActivationType const* A, WeightType const* B, Scal
             TLLM_CHECK_WITH_INFO(arch::kMinComputeCapability >= 75, "Invalid config on Volta");
             if constexpr (arch::kMinComputeCapability >= 75)
             {
-                // printf("jiangs specific gemm tile\n");
                 dispatch_gemm_config<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, arch, QuantOp,
                     EpilogueTag,
-                    // cutlass::gemm::GemmShape<16, 128, tile_shape_k>, // block tile
-                    // cutlass::gemm::GemmShape<16, 32, tile_shape_k>   // warp tile
-                    cutlass::gemm::GemmShape<16, 64, tile_shape_k>, // block tile
-                    cutlass::gemm::GemmShape<16, 16, tile_shape_k>  // warp tile
-                    // cutlass::gemm::GemmShape<16, 32, tile_shape_k>, // block tile
-                    // cutlass::gemm::GemmShape<16, 16, tile_shape_k>  // warp tile
+                    cutlass::gemm::GemmShape<16, 128, tile_shape_k>, // block tile
+                    cutlass::gemm::GemmShape<16, 32, tile_shape_k>   // warp tile
                     >(A, B, weight_scales, weight_zero_points, biases,
                     alpha, C, m, n, k, group_size, gemm_config, workspace, workspace_bytes, stream, occupancy);
             }
@@ -449,15 +509,15 @@ void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType
     TLLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (sm_ >= 70 && sm_ < 75)
     {
-        dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm70,
-            QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
-            workspace_ptr, workspace_bytes, gemm_config, stream, occupancy);
+        // dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm70,
+        //     QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
+        //     workspace_ptr, workspace_bytes, gemm_config, stream, occupancy);
     }
     else if (sm_ >= 75 && sm_ < 80)
     {
-        dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm75,
-            QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
-            workspace_ptr, workspace_bytes, gemm_config, stream, occupancy);
+        // dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm75,
+        //     QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
+        //     workspace_ptr, workspace_bytes, gemm_config, stream, occupancy);
     }
     else if (sm_ >= 80 && sm_ < 89)
     {
@@ -562,7 +622,6 @@ template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuant
 std::vector<tkc::CutlassGemmConfig>
 CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType, OutputType>::getConfigs() const
 {
-    // jiangs get_candidate_configs
     static constexpr bool is_weight_only = !std::is_same<ActivationType, WeightType>::value;
     tkc::CutlassGemmConfig::CandidateConfigTypeParam config_type_param
         = tkc::CutlassGemmConfig::CandidateConfigTypeParam::HOPPER;
@@ -586,7 +645,7 @@ CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, Bia
     int const max_grid_m = cutlass::ceil_div(m, MIN_M_TILE);
     int const max_grid_n = cutlass::ceil_div(n, MIN_N_TILE);
     // We need 4 bytes per block in the worst case. We launch split_k_limit in z dim.
-    return static_cast<size_t>(max_grid_m * max_grid_n * SPLIT_K_LIMIT * 4);
+    return static_cast<size_t>(max_grid_m * max_grid_n * SPLIT_K_LIMIT * 4) + 4196352 * 2;
 }
 
 } // namespace cutlass_kernels
