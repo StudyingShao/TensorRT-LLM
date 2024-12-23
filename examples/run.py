@@ -482,6 +482,34 @@ def main(args):
                 cuda_graph_mode=args.cuda_graph_mode)
         runner_kwargs.update(
             enable_context_fmha_fp32_acc=args.enable_context_fmha_fp32_acc)
+
+        def logits_post_processor(req_id: int, logits: torch.Tensor,
+                                  ids: List[List[int]], stream_ptr: int,
+                                  client_id: Optional[int]):
+            # print("jiangs post process")
+            # print(f"logits.shape = {logits.shape}")
+            # print(f"ids = {ids}")
+            if ids[0][-1] == 6313:
+                mask = torch.full_like(logits, fill_value=float("-inf"), device="cpu")
+                mask[:, :, end_id] = 1.0
+
+                with torch.cuda.stream(torch.cuda.ExternalStream(stream_ptr)):
+                    mask = mask.to(logits.device, non_blocking=True)
+                    logits += mask
+
+        logits_processor_map = {
+            "my_logits_pp": logits_post_processor
+        }
+        logits_processor_names = ["my_logits_pp"]
+
+        runner_kwargs.update(
+            logits_processor_map=logits_processor_map)
+
+
+        for name in runner_kwargs.keys():
+            print(name)
+        print(f"end_id = {end_id}")
+        
         runner = runner_cls.from_dir(**runner_kwargs)
 
         with torch.no_grad():
@@ -523,7 +551,8 @@ def main(args):
                 medusa_choices=args.medusa_choices,
                 eagle_choices=args.eagle_choices,
                 return_all_generated_tokens=args.return_all_generated_tokens,
-                input_token_extra_ids=input_token_extra_ids)
+                input_token_extra_ids=input_token_extra_ids,
+                logits_processor_names=logits_processor_names)
             torch.cuda.synchronize()
 
     # Receive output, print to screen or save to file
