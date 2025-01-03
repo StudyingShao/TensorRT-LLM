@@ -93,6 +93,19 @@ git clone https://huggingface.co/Qwen/Qwen-14B-Chat  ./tmp/Qwen/14B
 git clone https://huggingface.co/Qwen/Qwen-72B-Chat  ./tmp/Qwen/72B
 ```
 
+### Yarn
+
+Add the following fields to ckpt's `config.json` file before building engine to enable Yarn.
+```
+ "rope_scaling": {
+    "beta_fast": 32,
+    "beta_slow": 1,
+    "factor": 40,
+    "original_max_position_embeddings": 4096,
+    "type": "yarn"
+  },
+```
+
 ### Build TensorRT engine(s)
 
 The [`convert_checkpoint.py`](./convert_checkpoint.py) script converts HF weights to TensorRT-LLM checkpoints.
