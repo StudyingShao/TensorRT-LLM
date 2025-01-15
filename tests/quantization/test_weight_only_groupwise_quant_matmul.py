@@ -26,6 +26,7 @@ from parameterized import parameterized
 
 import tensorrt_llm
 from tensorrt_llm import Tensor
+from tensorrt_llm.parameter import Parameter
 from tensorrt_llm.quantization.functional import \
     weight_only_groupwise_quant_matmul
 
@@ -91,10 +92,9 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
                 bias = None
             # Init TensorRT-LLM tensor for alpha
             if th_alpha is not None:
-                alpha = Tensor(
-                    name='alpha',
-                    shape=th_alpha.shape,
-                    dtype=tensorrt_llm._utils.str_dtype_to_trt("float32"))
+                alpha = Parameter(th_alpha.cpu().numpy(),
+                                  shape=th_alpha.shape,
+                                  dtype="float32")
             else:
                 alpha = None
 
@@ -130,9 +130,6 @@ class TestWeightOnlyGroupWiseQuantMatmul(unittest.TestCase):
 
         if th_bias is not None:
             inputs['bias'] = th_bias
-
-        if th_alpha is not None:
-            inputs['alpha'] = th_alpha
 
         outputs = run_session(session, inputs, override_types=override_types)
 

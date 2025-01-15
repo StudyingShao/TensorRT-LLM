@@ -25,6 +25,7 @@ from ..functional import (Tensor, _add_plugin_info, _create_tensor, cast, clip,
                           constant, flatten, layer_norm, matmul,
                           repeat_interleave, rms_norm, round, sum, view)
 from ..layers.linear import ColumnLinear
+from ..parameter import Parameter
 from ..plugin import TRT_LLM_PLUGIN_NAMESPACE
 from .mode import QuantMode
 
@@ -261,7 +262,7 @@ def weight_only_groupwise_quant_matmul(input: Tensor,
                                        scales: Tensor,
                                        zeros: Tensor,
                                        biases: Tensor,
-                                       alpha: Tensor,
+                                       alpha: Parameter,
                                        quant_algo: int,
                                        group_size: int,
                                        dtype: str = 'float16') -> Tensor:
@@ -273,7 +274,7 @@ def weight_only_groupwise_quant_matmul(input: Tensor,
 
         if quant_algo & 8:
             # fp8_alpha
-            input = input * alpha
+            input = input * alpha.value
         if quant_algo & 4:
             # pre quant
             input = input * pre_quant_scale
@@ -299,13 +300,24 @@ def weight_only_groupwise_quant_matmul(input: Tensor,
                                       np.array(group_size, dtype=np.int32),
                                       trt.PluginFieldType.INT32)
 
+        if alpha:
+            alpha.is_buffer = True
+            alpha_value = alpha.raw_value[0]
+        else:
+            alpha_value = 1.0
+
+        alpha_ = trt.PluginField("alpha", np.array(alpha_value,
+                                                   dtype=np.float32),
+                                 trt.PluginFieldType.FLOAT32)
+
         p_dtype = default_net(
         ).plugin_config.weight_only_groupwise_quant_matmul_plugin
         pf_type_ = trt.PluginField(
             "type_id", np.array([int(str_dtype_to_trt(p_dtype))], np.int32),
             trt.PluginFieldType.INT32)
 
-        pfc = trt.PluginFieldCollection([pf_type_, quant_algo_, group_size_])
+        pfc = trt.PluginFieldCollection(
+            [pf_type_, quant_algo_, group_size_, alpha_])
 
         matmul_plug = plg_creator.create_plugin("woq_groupwise_matmul", pfc)
 
@@ -318,7 +330,6 @@ def weight_only_groupwise_quant_matmul(input: Tensor,
         BIAS = 1
         ZERO = 2
         PRE_QUANT_SCALE = 4
-        FP8_ALPHA = 8
 
         if quant_algo & PRE_QUANT_SCALE:
             plug_inputs += [pre_quant_scale.trt_tensor]
@@ -329,8 +340,6 @@ def weight_only_groupwise_quant_matmul(input: Tensor,
             plug_inputs += [zeros.trt_tensor]
         if quant_algo & BIAS:
             plug_inputs += [biases.trt_tensor]
-        if quant_algo & FP8_ALPHA:
-            plug_inputs += [alpha.trt_tensor]
 
         layer = default_trtnet().add_plugin_v2(plug_inputs, matmul_plug)
         _add_plugin_info(layer, plg_creator, "woq_groupwise_matmul", pfc)
