@@ -853,9 +853,9 @@ def optimize_model_with_config(model: PretrainedModel,
         use_prompt_tuning=(build_config.max_prompt_embedding_table_size > 0),
         use_lora=build_config.plugin_config.lora_plugin is not None,
         max_lora_rank=build_config.lora_config.max_lora_rank,
-        use_fp8_context_fmha=(
-            QuantAlgo.FP8 == model.config.quantization.quant_algo
-            and build_config.plugin_config.use_fp8_context_fmha),
+        use_fp8_context_fmha=(model.config.quantization.quant_algo in [
+            QuantAlgo.FP8, QuantAlgo.W4A8_AWQ
+        ] and build_config.plugin_config.use_fp8_context_fmha),
         use_optimize_cross_qkv=True,
     )
 
@@ -1100,7 +1100,8 @@ def build(model: PretrainedModel, build_config: BuildConfig) -> Engine:
 
     if build_config.plugin_config.use_paged_context_fmha:
         if (model.config.quant_mode.has_fp8_kv_cache()
-                and not model.config.quant_mode.has_fp8_qdq()):
+                and not model.config.quantization.quant_algo
+                in [QuantAlgo.FP8, QuantAlgo.W4A8_AWQ]):
             raise RuntimeError(
                 "FP8 Paged Context FMHA only works with fp8 quantization workflow currently."
             )

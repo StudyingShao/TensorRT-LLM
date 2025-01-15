@@ -157,7 +157,7 @@ bool GPTAttentionPlugin::isEntryUsed(IdxEntry const& entry) const
     case IdxEntry::PAST_KEY_VALUE: return useKVCache() && !mPagedKVCache;
     case IdxEntry::KV_CACHE_QUANTIZATION_SCALE: return useKVCache() && mKVCacheQuantMode.hasKvCacheQuant();
     case IdxEntry::KV_CACHE_DEQUANTIZATION_SCALE: return useKVCache() && mKVCacheQuantMode.hasKvCacheQuant();
-    case IdxEntry::ATTENTION_OUTPUT_QUANTIZATION_SCALE: return mFP8ContextFMHA && mKVCacheQuantMode.hasFp8Qdq();
+    case IdxEntry::ATTENTION_OUTPUT_QUANTIZATION_SCALE: return mFP8ContextFMHA;
     case IdxEntry::ROTARY_INV_FREQ: return isRoPE();
     case IdxEntry::ROTARY_COS_SIN: return isRoPE() || mIsMLAEnabled;
     case IdxEntry::ALIBI_SLOPES: return isALiBi();

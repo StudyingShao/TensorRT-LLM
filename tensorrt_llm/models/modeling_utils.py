@@ -1421,7 +1421,7 @@ def set_fp8_context_fhma(model: PretrainedModel) -> PretrainedModel:
                 layer.dense, 'activation_scaling_factor'):
             scale = [1.0] / layer.dense.activation_scaling_factor.raw_value
             layer.attention_output_orig_quant_scale = Parameter(
-                value=scale.astype(np.float32))
+                value=scale.astype(np.float32), dtype='float32')
     return model
 
 
@@ -1608,6 +1608,9 @@ def preprocess_perlayer_weights(weights,
                     weights[name.replace(
                         'weights_scaling_factor', 'alpha'
                     )] = activation_scaling_factor * weights_scaling_factor_2
+                    weights[name.replace('weights_scaling_factor',
+                                         'activation_scaling_factor'
+                                         )] = activation_scaling_factor
 
     # FP8
     elif quant_algo == QuantAlgo.FP8:

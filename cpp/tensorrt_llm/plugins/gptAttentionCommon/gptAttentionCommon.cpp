@@ -1343,9 +1343,6 @@ int GPTAttentionPluginCommon::enqueueContext(EnqueueContextParams<T> const& para
         bool const enablePagedKVContextFMHA = mPagedKVCache && mPagedContextFMHA;
         TLLM_CHECK_WITH_INFO(!(mKVCacheQuantMode.hasInt8KvCache() && enablePagedKVContextFMHA),
             "Paged Context FMHA doesn't work with int8 kv cache currently.");
-        TLLM_CHECK_WITH_INFO(
-            !(mKVCacheQuantMode.hasFp8KvCache() && !mKVCacheQuantMode.hasFp8Qdq() && enablePagedKVContextFMHA),
-            "FP8 Paged Context FMHA only works with fp8 quantization workflow currently.");
         TLLM_CHECK_WITH_INFO(!(params.sink_token_length > 0 && enablePagedKVContextFMHA),
             "Cannot support StreamingLLM now when enabling paged KV context FMHA.");
 

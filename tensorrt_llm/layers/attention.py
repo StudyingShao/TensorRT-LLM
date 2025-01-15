@@ -1024,11 +1024,6 @@ class Attention(Module):
                 kv_quant_orig_scale = None
 
             # Attention output scales
-            assert (
-                not default_net().plugin_config.use_fp8_context_fmha
-            ) or self.quant_mode.has_fp8_qdq(
-            ), "FP8 Context FMHA must be used together with the fp8 quantization workflow."
-
             attention_output_orig_quant_scale = self.attention_output_orig_quant_scale.value if self.attention_output_orig_quant_scale is not None else None
 
             # The rotary inv freq can be pre-computed.
@@ -1846,11 +1841,6 @@ class CogVLMAttention(Attention):
             ) else None
 
             # Attention output scales
-            assert (
-                not default_net().plugin_config.use_fp8_context_fmha
-            ) or self.quant_mode.has_fp8_qdq(
-            ), "FP8 Context FMHA must be used together with the fp8 quantization workflow."
-
             attention_output_orig_quant_scale = self.attention_output_orig_quant_scale.value if self.attention_output_orig_quant_scale is not None else None
             context, past_key_value = gpt_attention(
                 qkv=qkv,
@@ -2129,11 +2119,6 @@ class DeepseekV2Attention(Attention):
                 kv_quant_orig_scale = None
 
             # Attention output scales
-            assert (
-                not default_net().plugin_config.use_fp8_context_fmha
-            ) or self.quant_mode.has_fp8_qdq(
-            ), "FP8 Context FMHA must be used together with the fp8 quantization workflow."
-
             attention_output_orig_quant_scale = self.attention_output_orig_quant_scale.value if self.attention_output_orig_quant_scale is not None else None
 
             rotary_cos_sin = self.embed_positions_for_gpt_attention.value
