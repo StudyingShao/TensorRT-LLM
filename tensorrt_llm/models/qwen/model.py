@@ -137,6 +137,11 @@ class QWenDecoderLayer(Module):
         if use_cache:
             attention_output, presents = attention_output
 
+        # ------------------------------------------------------
+        print("trtllm_attn_output registered!")
+        self.register_network_output('trtllm_attn_output', attention_output)
+        # ------------------------------------------------------
+
         hidden_states = residual + attention_output
 
         residual = hidden_states
@@ -193,6 +198,11 @@ class QWenModel(Module):
         else:
             hidden_states = recv(hidden_states, self.mapping.prev_pp_rank())
 
+        # ------------------------------------------------------
+        print("trtllm_embeds_output registered!")
+        self.register_network_output('trtllm_embeds_output', hidden_states)
+        # ------------------------------------------------------
+
         hidden_states = self.layers.forward(
             hidden_states,
             use_cache=use_cache,
@@ -210,6 +220,11 @@ class QWenModel(Module):
             hidden_states = self.ln_f(hidden_states)
         else:
             hidden_states = send(hidden_states, self.mapping.next_pp_rank())
+
+        # ------------------------------------------------------
+        print("trtllm_norm_output registered!")
+        self.register_network_output('trtllm_norm_output', hidden_states)
+        # ------------------------------------------------------
 
         if use_cache:
             return (hidden_states, tuple(presents))

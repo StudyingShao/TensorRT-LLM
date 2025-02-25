@@ -19,6 +19,13 @@
 # limitations under the License.
 """PyTorch Qwen2-VL model."""
 
+iter = 0
+layer_idx = 0
+
+MAX_ITER = 100
+
+import numpy as np
+
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -906,6 +913,16 @@ class Qwen2VLDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+
+        global iter
+        global layer_idx
+        if iter < MAX_ITER:
+            numpy_array = hidden_states.float().cpu().numpy()
+            path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_{iter}/transformer.layers.{layer_idx}.hf_attn_output.npy'
+            np.save(path, numpy_array)
+            print(f"{iter} attn output {hidden_states.shape} {numpy_array}")
+            layer_idx += 1
+
         hidden_states = residual + hidden_states
 
         # Fully Connected
@@ -1120,6 +1137,16 @@ class Qwen2VLModel(Qwen2VLPreTrainedModel):
 
         hidden_states = inputs_embeds
 
+        global iter
+        global layer_idx
+        layer_idx = 0
+        if iter < MAX_ITER:
+            numpy_array = hidden_states.float().cpu().numpy()
+            path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_{iter}/transformer.hf_embeds_output.npy'
+            np.save(path, numpy_array)
+            print(f"{iter} embeds output {hidden_states.shape} {numpy_array}")
+
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -1160,6 +1187,12 @@ class Qwen2VLModel(Qwen2VLPreTrainedModel):
                 all_self_attns += (layer_outputs[1],)
 
         hidden_states = self.norm(hidden_states)
+        if iter < MAX_ITER:
+            numpy_array = hidden_states.float().cpu().numpy()
+            path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_{iter}/transformer.hf_norm_output.npy'
+            np.save(path, numpy_array)
+            print(f"{iter} norm output {hidden_states.shape} {numpy_array}")
+
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
@@ -1618,6 +1651,39 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel):
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
+
+        global iter
+
+        if iter < MAX_ITER:
+            numpy_array = logits.float().cpu().numpy()
+            path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_{iter}/transformer.hf_logits.npy'
+            np.save(path, numpy_array)
+            print(f"{iter} logits {logits.shape} {numpy_array}")
+
+        import pickle
+
+        if False:
+        # if logits.shape[1] > 1:            
+            # a = []
+            # a.append(logits)
+            # file_path = "/TRT/GPTQ_CheckPoints_GPT_NeoX/trtllm_github_0170release/examples/multimodal/HF_files/context_logits.pickle"
+            # with open(file_path, "wb") as f:
+            #     pickle.dump(a, f)
+            file_path = "/TRT/GPTQ_CheckPoints_GPT_NeoX/trtllm_github_0170release/examples/multimodal/HF_files/context_logits_trtllm.pickle"
+            trtllm_context_logits = None
+            with open(file_path, "rb") as f:
+                trtllm_context_logits = pickle.load(f)
+            print(f"trtllm_context_logits {trtllm_context_logits[0].shape} {logits.shape}")
+            # ([350, 152064]) 
+            # ([1, 348, 152064])
+            logits[0, 0:15] = trtllm_context_logits[0][0:15]
+            logits[0, 337:348] = trtllm_context_logits[0][339:350]
+
+        # for i in range(logits.shape[1]):
+        #     print(f"{i} {logits[0, i]}")
+
+        iter += 1
+
         logits = logits.float()
 
         loss = None

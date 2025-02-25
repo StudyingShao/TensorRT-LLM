@@ -283,6 +283,9 @@ class LlavaOnevisionUtils:
 class MultimodalModelRunner:
 
     def __init__(self, args):
+
+        print("jiangs MultimodalModelRunner __init__")
+
         self.args = args
 
         self.runtime_rank = mpi_rank()
@@ -467,6 +470,14 @@ class MultimodalModelRunner:
                 'phi-3-vision', 'pix2struct', 'llava_next', 'llava', 'fuyu',
                 'kosmos-2', 'mllama', 'llava_onevision', 'qwen2_vl'
         ]:
+            
+            # min_pixels = 256*28*28
+            # max_pixels = 1280*28*28
+
+            # self.processor = AutoProcessor.from_pretrained(
+            #     self.args.hf_model_dir, trust_remote_code=True,
+            #     min_pixels=min_pixels, max_pixels=max_pixels)
+
             self.processor = AutoProcessor.from_pretrained(
                 self.args.hf_model_dir, trust_remote_code=True)
 
@@ -577,7 +588,7 @@ class MultimodalModelRunner:
                 self.model = ModelRunnerCpp.from_dir(
                     self.args.llm_engine_dir,
                     rank=tensorrt_llm.mpi_rank(),
-                    debug_mode=False,
+                    debug_mode=True, # 这里debug
                     enable_chunked_context=self.args.enable_chunked_context,
                     enable_context_fmha_fp32_acc=self.args.
                     enable_context_fmha_fp32_acc,
@@ -992,6 +1003,9 @@ class MultimodalModelRunner:
         # args[2]: prompt task vocab size, [1]. assuming all table has the same length, which in multimodal case equals to multimodal_len
         profiler.start("LLM")
         if self.decoder_llm and self.model_type != "mllama":
+
+            print("jiangs MultimodalModelRunner")
+
             end_id = self.tokenizer.eos_token_id
             if 'opt' in self.model_type and 'blip2' in self.model_type:
                 # For BLIP2-OPT, model outputs a "\n" at the end.
@@ -1010,7 +1024,9 @@ class MultimodalModelRunner:
             prompt_table = prompt_table.view(batch_size, -1,
                                              prompt_table.shape[-1])
 
-            output_ids = self.model.generate(
+            print("jiangs end_id ", end_id)
+
+            output_ids_jiangs = self.model.generate(
                 input_ids,
                 input_position_ids=input_position_ids
                 if self.model_type == 'cogvlm' else None,
@@ -1030,7 +1046,52 @@ class MultimodalModelRunner:
                 repetition_penalty=self.args.repetition_penalty,
                 num_beams=self.args.num_beams,
                 output_sequence_lengths=False,
-                return_dict=False)
+                return_dict=True)
+
+            output_ids = output_ids_jiangs['output_ids']
+            context_logits = output_ids_jiangs['context_logits'][0]
+            gen_logits = output_ids_jiangs['generation_logits']
+
+            #########################################################################################################################################
+            # import pickle
+            # a = []
+            # a.append(context_logits)
+            # file_path = "/TRT/GPTQ_CheckPoints_GPT_NeoX/trtllm_github_0170release/examples/multimodal/HF_files/context_logits_trtllm.pickle"
+            # with open(file_path, "wb") as f:
+            #     pickle.dump(a, f)
+            #########################################################################################################################################
+
+            # print(f"context_logits  {context_logits}")
+            # print(f"gen_logits  {gen_logits}")
+            print(f"input_ids {input_ids.shape} {input_ids}")
+
+            #########################################################################################################################################
+            numpy_array = context_logits.float().cpu().numpy()
+            path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_0/transformer.trtllm_context_logits.npy'
+            np.save(path, numpy_array)
+            
+            # gen_logits [1, 1, 512, 152064]
+            for i in range(gen_logits.shape[2]):
+                numpy_array = gen_logits[0, 0, i].float().cpu().numpy()
+                path = f'/tmp/tllm_debug/PP_1/TP_1/iteration_{i}/transformer.trtllm_gen_logits.npy'
+                np.save(path, numpy_array)
+                # print(f"{i} gen_logits {gen_logits[0, 0, i]}")
+
+            # print(f"{iter} logits {logits.shape} {numpy_array}")
+            #########################################################################################################################################
+
+            for i in range(input_ids.shape[1]):
+                print(f"{i} input_ids {input_ids[0, i]} {context_logits[i]}")
+
+            # print(f"context_logits {context_logits.shape} {context_logits}")
+            print(f"gen_logits {gen_logits.shape} {gen_logits}")
+            for i in range(gen_logits.shape[2]):
+                print(f"{i} gen_logits {gen_logits[0, 0, i]}")
+
+            print("jiangs output_ids ", output_ids.shape, output_ids)
+            for i in range(348, output_ids.shape[2]):
+                print(f"{i - 348} ", output_ids[0, 0, i].item())
+
         elif self.model_type == "mllama":
             # When image is passed:
             # the shape of visual_features is [bs, 1, 4, 1025, hidden_size]
@@ -1815,7 +1876,7 @@ class MultimodalModelRunner:
             from transformers.models.qwen2_vl.modeling_qwen2_vl import \
                 VisionRotaryEmbedding
             hf_config = AutoConfig.from_pretrained(self.args.hf_model_dir)
-            processor = AutoProcessor.from_pretrained(self.args.hf_model_dir)
+            processor = self.processor
             if input_text is None:
                 input_text = ["Question: Describe this image. Answer:"
                               ] * self.args.batch_size
@@ -1825,7 +1886,7 @@ class MultimodalModelRunner:
                 "content": [
                     {
                         "type": "image",
-                        "image": raw_image[idx],
+                        "image": "/TRT/GPTQ_CheckPoints_GPT_NeoX/trtllm_github_0170release/examples/multimodal/pics/qwen2vl_pic2.jpg",
                     },
                     {
                         "type": "text",
@@ -1834,13 +1895,21 @@ class MultimodalModelRunner:
                 ],
             }] for idx in range(self.args.batch_size)]
 
+                        # "image": raw_image[idx],
             texts = [
                 processor.apply_chat_template(msg,
                                               tokenize=False,
                                               add_generation_prompt=True)
                 for msg in messages
             ]
+
+            print(f"jiangs raw_image {raw_image[0]}")
+            print(f"jiangs messages {messages}")
+
             image_inputs, video_inputs = process_vision_info(messages)
+
+            print(f"jiangs {image_inputs}")
+
             inputs = processor(
                 text=texts,
                 images=image_inputs,
@@ -1852,6 +1921,9 @@ class MultimodalModelRunner:
             image = inputs['pixel_values']
             image_grid_thw = inputs['image_grid_thw']
             input_ids = inputs['input_ids']
+
+            print(f"jiangs ---- {input_ids.shape} {input_ids}")
+
             attention_mask = inputs['attention_mask']
             cu_seqlens = torch.repeat_interleave(
                 image_grid_thw[:, 1] * image_grid_thw[:, 2],
@@ -2132,6 +2204,9 @@ class MultimodalModelRunner:
     def run(self, input_text, input_image, max_new_tokens):
         input_text, pre_prompt, post_prompt, processed_image, decoder_input_ids, other_vision_inputs, other_decoder_inputs = self.setup_inputs(
             input_text, input_image)
+
+        print("jiangs run")
+
         output_text = self.generate(pre_prompt,
                                     post_prompt,
                                     processed_image,

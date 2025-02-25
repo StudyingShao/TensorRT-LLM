@@ -1778,6 +1778,9 @@ class GenerationMixin:
                     - [`~generation.GenerateEncoderDecoderOutput`],
                     - [`~generation.GenerateBeamEncoderDecoderOutput`]
         """
+
+        print("jiangs generate")
+
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
         self._validate_model_class()
         tokenizer = kwargs.pop("tokenizer", None)  # Pull this out first, we only use it for stopping criteria
@@ -1925,6 +1928,8 @@ class GenerationMixin:
             generation_config=generation_config, stopping_criteria=stopping_criteria, tokenizer=tokenizer, **kwargs
         )
 
+        print("jiangs here", generation_mode)
+
         # 10. go into different generation modes
         if generation_mode == GenerationMode.ASSISTED_GENERATION:
             if generation_config.num_return_sequences > 1:
@@ -2010,6 +2015,8 @@ class GenerationMixin:
                 is_encoder_decoder=self.config.is_encoder_decoder,
                 **model_kwargs,
             )
+
+            print("jiangs here 1")
 
             # 12. run sample (it degenerates to greedy search when `generation_config.do_sample=False`)
             result = self._sample(
@@ -2951,6 +2958,7 @@ class GenerationMixin:
         unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
         model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
 
+        iter = 0
         while self._has_unfinished_sequences(
             this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
         ):
@@ -2961,6 +2969,7 @@ class GenerationMixin:
             model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
             model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
 
+            print("jiangs forward pass to get next token")
             # forward pass to get next token
             outputs = self(**model_inputs, return_dict=True)
 
@@ -2974,6 +2983,10 @@ class GenerationMixin:
 
             # pre-process distribution
             next_token_scores = logits_processor(input_ids, next_token_logits)
+
+            print(f"-------------------------------------------------------------")
+            print(f"outputs {iter} {outputs}")
+            print(f"-------------------------------------------------------------")
 
             # Store scores, attentions and hidden_states when required
             if return_dict_in_generate:
@@ -3003,6 +3016,11 @@ class GenerationMixin:
             else:
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
 
+            if iter == 64:
+                next_tokens[0] = 44729
+            print(f"next_tokens {iter} {next_tokens}")
+            iter += 1
+
             # finished sentences should have their next token be a padding token
             if has_eos_stopping_criteria:
                 next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
@@ -3027,6 +3045,8 @@ class GenerationMixin:
 
         if streamer is not None:
             streamer.end()
+
+        print("jiangs here 3")
 
         if return_dict_in_generate:
             if self.config.is_encoder_decoder:

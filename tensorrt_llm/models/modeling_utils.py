@@ -1018,6 +1018,13 @@ class DecoderModelForCausalLM(PretrainedModel):
                 default_net().plugin_config.remove_input_padding)
 
             # [batch_size, hidden_size] -> [batch_size, vocab_size]
+            
+            # Register as model output
+            # ------------------------------------------------------
+            self.register_network_output('jiangs_output', hidden_states)
+            # ------------------------------------------------------
+
+            
             lm_logits = self.lm_head(hidden_states)
             if hasattr(self.config, 'output_multiplier_scale'):
                 lm_logits *= getattr(self.config, 'output_multiplier_scale', 1)

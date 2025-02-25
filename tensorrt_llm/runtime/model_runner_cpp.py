@@ -78,6 +78,10 @@ class ModelRunnerCpp(ModelRunnerMixin):
         self.max_seq_len = max_seq_len
         self.max_beam_width = max_beam_width
         self.model_config = model_config
+
+        print(f"self.model_config.compute_context_logits {self.model_config.compute_context_logits}")
+        print(f"self.model_config.compute_generation_logits {self.model_config.compute_generation_logits}")
+
         self.mapping = _world_config_to_mapping(world_config)
         self.world_config = world_config
         self.use_kv_cache = use_kv_cache
@@ -388,6 +392,10 @@ class ModelRunnerCpp(ModelRunnerMixin):
             assert max_beam_width <= model_config.max_beam_width
 
         debug_config = None
+
+        print(f"jiangs debug_mode {debug_mode}")
+
+
         if debug_mode:
             # To debug specific tensors, add tensor names in the following list
             #   if none provided, all input and output tensors will be dumped
@@ -625,6 +633,11 @@ class ModelRunnerCpp(ModelRunnerMixin):
                 context_logits and generation_logits (if self.gather_context_logits=True and
                 self.gather_generation_logits=True, respectively).
         """
+
+        print("jiangs model_runner_cpp generate")
+        print("jiangs end_id ", end_id)
+
+
         # TODO: Check if these can be supported now and support them
         if stopping_criteria is not None:
             raise RuntimeError(
@@ -902,6 +915,8 @@ class ModelRunnerCpp(ModelRunnerMixin):
             response for responses in multi_responses for response in responses
         ]
 
+        print("jiangs _initialize_and_fill_output")
+
         return self._fill_output(
             responses=responses,
             output_ids=output_ids,
@@ -988,6 +1003,9 @@ class ModelRunnerCpp(ModelRunnerMixin):
         sampling_config: SamplingConfigType,
         is_draft_target_model: bool,
     ):
+
+        print("jiangs _fill_output")
+
         cuda_device = torch.device("cuda")
 
         batch_size = len(batch_input_ids)
@@ -1032,6 +1050,7 @@ class ModelRunnerCpp(ModelRunnerMixin):
                                   dtype=torch.int32,
                                   device=cuda_device)
 
+        print(f"return_dict {return_dict}")
         if return_dict:
             outputs = {'output_ids': output_ids}
 
@@ -1045,6 +1064,10 @@ class ModelRunnerCpp(ModelRunnerMixin):
                                                            device=cuda_device)
 
             if self.gather_context_logits:
+
+                print("jiangs gather_context_logits")
+
+
                 context_logits = None
                 max_input_len = input_lengths.max()
                 for response in responses:

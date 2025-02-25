@@ -85,9 +85,20 @@ if __name__ == '__main__':
     args = parser.parse_args()
     logger.set_level(args.log_level)
 
+    print("jiangs args ", args)
+    ####################################################
+    args.temperature = 0.01
+    args.top_p = 0.001
+    args.repetition_penalty = 1.0
+
+    args.debug_mode = True
+    print("jiangs args ", args)
+    ####################################################
+
     model = MultimodalModelRunner(args)
     input_multimodal_data = model.load_test_data(args.image_path,
                                                  args.video_path)
+    print(f"input_multimodal_data {input_multimodal_data}")
 
     num_iters = args.profiling_iterations if args.run_profiling else 1
 

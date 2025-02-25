@@ -58,3 +58,5 @@ cpp/include/tensorrt_llm/executor/version.h
 CMakeUserPresets.json
 compile_commands.json
 *.bin
+
+*.pickle
