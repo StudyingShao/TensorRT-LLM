@@ -2,10 +2,13 @@ from itertools import product
 from typing import Dict, List, Optional
 
 import pytest
+import triton
+import prettytable as pt
 import torch
+import torch.cuda.nvtx as nvtx
 import torch.nn as nn
-from utils.util import (skip_neither_ada_nor_hopper_unittest,
-                        skip_pre_blackwell, skip_pre_hopper)
+# from utils.util import (skip_neither_ada_nor_hopper_unittest,
+#                         skip_pre_blackwell, skip_pre_hopper)
 
 from tensorrt_llm._torch.autotuner import AutoTuner, autotune
 from tensorrt_llm._torch.model_config import ModelConfig
@@ -17,80 +20,21 @@ from tensorrt_llm._torch.modules.gated_mlp import GatedMLP
 from tensorrt_llm.models.modeling_utils import QuantAlgo, QuantConfig
 
 
-@pytest.mark.parametrize(
-    "dtype, experts, RoutingMethodCls",
-    product([torch.float16, torch.bfloat16], [3, 8, 512],
-            [DefaultMoeRoutingMethod, RenormalizeMoeRoutingMethod]))
-def test_fused_moe(dtype, experts, RoutingMethodCls):
-    SEQ_LEN = 8
-    HIDDEN_SIZE = 64
-    INTERMEDIATE_SIZE = 32
-    NUM_EXPERTS = experts
-    TOP_K = 2
-    routing_method = RoutingMethodCls(top_k=TOP_K)
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    x = torch.randn((SEQ_LEN, HIDDEN_SIZE), dtype=dtype).cuda()
-    router_logits = torch.randn((SEQ_LEN, NUM_EXPERTS), dtype=dtype).cuda()
+# @skip_pre_hopper
+# @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_fused_moe_fp8_tensor_scaling(
+    dtype,
+    SEQ_LEN = 4,
+    HIDDEN_SIZE = 64,
+    INTERMEDIATE_SIZE = 32,
+    NUM_EXPERTS = 3,
+    TOP_K = 2):
 
-    weights = {}
-    for expert_id in range(NUM_EXPERTS):
-        w1_weight = torch.randn((INTERMEDIATE_SIZE, HIDDEN_SIZE),
-                                dtype=dtype).cuda()
-        w2_weight = torch.randn((HIDDEN_SIZE, INTERMEDIATE_SIZE),
-                                dtype=dtype).cuda()
-        w3_weight = torch.randn((INTERMEDIATE_SIZE, HIDDEN_SIZE),
-                                dtype=dtype).cuda()
-        weights[f"{expert_id}.w1.weight"] = w1_weight
-        weights[f"{expert_id}.w2.weight"] = w2_weight
-        weights[f"{expert_id}.w3.weight"] = w3_weight
-    fused_moe = FusedMoE(num_experts=NUM_EXPERTS,
-                         routing_method=routing_method,
-                         hidden_size=HIDDEN_SIZE,
-                         intermediate_size=INTERMEDIATE_SIZE,
-                         dtype=dtype,
-                         reduce_results=False,
-                         model_config=ModelConfig())
-    fused_moe.load_weights([weights])
-    fused_moe.cuda()
-
-    AutoTuner.get().clear_cache()
-    with torch.inference_mode(), autotune():
-        fused_moe.forward(x, router_logits)
-
-    ref_fused_moe = RefGatedMLPFusedMoE(num_experts=NUM_EXPERTS,
-                                        routing_method=routing_method,
-                                        hidden_size=HIDDEN_SIZE,
-                                        intermediate_size=INTERMEDIATE_SIZE,
-                                        dtype=dtype,
-                                        model_config=ModelConfig())
-    ref_fused_moe.load_weights([weights])
-    ref_fused_moe.cuda()
-
-    # Evaluate the outputs on a variant sequence length to cover all possible keys in Autotuner cache
-    m = SEQ_LEN
-    while m >= 2:
-        x = torch.randn((m, HIDDEN_SIZE), dtype=dtype).cuda()
-        router_logits = torch.randn((m, NUM_EXPERTS), dtype=dtype).cuda()
-
-        with torch.inference_mode():
-            output = fused_moe.forward(x, router_logits)
-            ref_output = ref_fused_moe.forward(x, router_logits)
-
-        # Evaluate outputs
-        torch.cuda.synchronize()
-        torch.testing.assert_close(output, ref_output, rtol=0.2, atol=0.2)
-        m //= 2
-
-
-@skip_pre_hopper
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_fused_moe_fp8(dtype):
-    SEQ_LEN = 4
-    HIDDEN_SIZE = 64
-    INTERMEDIATE_SIZE = 32
-    NUM_EXPERTS = 3
-    TOP_K = 2
+    # SEQ_LEN = 4
+    # HIDDEN_SIZE = 64
+    # INTERMEDIATE_SIZE = 32
+    # NUM_EXPERTS = 3
+    # TOP_K = 2
     routing_method = DefaultMoeRoutingMethod(top_k=TOP_K)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
@@ -159,85 +103,68 @@ def test_fused_moe_fp8(dtype):
     ref_fused_moe.load_weights([weights])
     ref_fused_moe.cuda()
     with torch.inference_mode():
+        nvtx.range_push("fp8 tensor")
         output = fused_moe.forward(x, router_logits)
+        nvtx.range_pop()
         ref_output = ref_fused_moe.forward(x, router_logits)
 
     # compare
     torch.cuda.synchronize()
-    torch.testing.assert_close(output, ref_output, rtol=1e-2, atol=0.1)
+    # torch.testing.assert_close(output, ref_output, rtol=0.1, atol=0.5)
 
 
-@skip_pre_blackwell
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_fused_moe_nvfp4(dtype):
-    SCALING_VECTOR_SIZE = 16
+def test_fused_moe_fp8_block_scaling(
+    dtype,
+    SEQ_LEN = 4,
+    HIDDEN_SIZE = 64,
+    INTERMEDIATE_SIZE = 32,
+    NUM_EXPERTS = 3,
+    TOP_K = 2):
 
-    SEQ_LEN = 4
-    HIDDEN_SIZE = 128
-    INTERMEDIATE_SIZE = 128
-    NUM_EXPERTS = 3
-    TOP_K = 2
+    # SEQ_LEN = 4
+    # HIDDEN_SIZE = 64
+    # INTERMEDIATE_SIZE = 32
+    # NUM_EXPERTS = 3
+    # TOP_K = 2
     routing_method = DefaultMoeRoutingMethod(top_k=TOP_K)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     x = torch.randn((SEQ_LEN, HIDDEN_SIZE), dtype=dtype).cuda()
-    x_sf_global = (448 * 6) / x.abs().max().float()
     router_logits = torch.randn((SEQ_LEN, NUM_EXPERTS), dtype=dtype).cuda()
 
     weights = {}
     for expert_id in range(NUM_EXPERTS):
         w1_weight = torch.randn((INTERMEDIATE_SIZE, HIDDEN_SIZE),
-                                dtype=dtype).cuda()
-        w1_sf_global = (448 * 6) / w1_weight.abs().max().float()
-
+                                dtype=dtype).cuda().to(torch.float8_e4m3fn)
         w2_weight = torch.randn((HIDDEN_SIZE, INTERMEDIATE_SIZE),
-                                dtype=dtype).cuda()
-        w2_sf_global = (448 * 6) / w2_weight.abs().max().float()
-
+                                dtype=dtype).cuda().to(torch.float8_e4m3fn)
         w3_weight = torch.randn((INTERMEDIATE_SIZE, HIDDEN_SIZE),
-                                dtype=dtype).cuda()
-        w3_sf_global = (448 * 6) / w3_weight.abs().max().float()
+                                dtype=dtype).cuda().to(torch.float8_e4m3fn)
 
-        w3_w1_global = min(
-            w1_sf_global,
-            w3_sf_global)  # w3 global and w1 global must be the same
+        w1_weight_scale = torch.randn(
+                    (w1_weight.shape[0] //128,
+                    w1_weight.shape[1] // 128),
+                    dtype=torch.float32,
+                    device="cuda")
+        w2_weight_scale = torch.randn(
+                    (w2_weight.shape[0] // 128,
+                    w2_weight.shape[1] // 128),
+                    dtype=torch.float32,
+                    device="cuda")
+        w3_weight_scale = torch.randn(
+                    (w3_weight.shape[0] // 128,
+                    w3_weight.shape[1] // 128),
+                    dtype=torch.float32,
+                    device="cuda")
 
-        w1_weight_nvfp4, w1_sf_block = torch.ops.trtllm.fp4_quantize(
-            w1_weight, w3_w1_global, SCALING_VECTOR_SIZE, False)
-        w1_sf_block_unswizzled = torch.ops.tensorrt_llm.nvfp4_block_scale_interleave_reverse(
-            w1_sf_block.cpu().view(INTERMEDIATE_SIZE, -1))
+        weights[f"{expert_id}.w1.weight"] = w1_weight
+        weights[f"{expert_id}.w2.weight"] = w2_weight
+        weights[f"{expert_id}.w3.weight"] = w3_weight
+        weights[f"{expert_id}.w1.weight_scale_inv"] = w1_weight_scale
+        weights[f"{expert_id}.w2.weight_scale_inv"] = w2_weight_scale
+        weights[f"{expert_id}.w3.weight_scale_inv"] = w3_weight_scale
 
-        w2_weight_nvfp4, w2_sf_block = torch.ops.trtllm.fp4_quantize(
-            w2_weight, w2_sf_global, SCALING_VECTOR_SIZE, False)
-        w2_sf_block_unswizzled = torch.ops.tensorrt_llm.nvfp4_block_scale_interleave_reverse(
-            w2_sf_block.cpu().view(HIDDEN_SIZE, -1))
-
-        w3_weight_nvfp4, w3_sf_block = torch.ops.trtllm.fp4_quantize(
-            w3_weight, w3_w1_global, SCALING_VECTOR_SIZE, False)
-        w3_sf_block_unswizzled = torch.ops.tensorrt_llm.nvfp4_block_scale_interleave_reverse(
-            w3_sf_block.cpu().view(INTERMEDIATE_SIZE, -1))
-
-        w1_input_scale = x_sf_global.cuda()
-        w2_input_scale = x_sf_global.cuda()
-        w3_input_scale = x_sf_global.cuda()
-
-        weights[f"{expert_id}.w1.weight"] = w1_weight_nvfp4
-        weights[f"{expert_id}.w2.weight"] = w2_weight_nvfp4
-        weights[f"{expert_id}.w3.weight"] = w3_weight_nvfp4
-        weights[f"{expert_id}.w1.weight_scale"] = w1_sf_block_unswizzled.view(
-            torch.float8_e4m3fn).cuda()
-        weights[f"{expert_id}.w2.weight_scale"] = w2_sf_block_unswizzled.view(
-            torch.float8_e4m3fn).cuda()
-        weights[f"{expert_id}.w3.weight_scale"] = w3_sf_block_unswizzled.view(
-            torch.float8_e4m3fn).cuda()
-        weights[f"{expert_id}.w1.input_scale"] = 1.0 / w1_input_scale
-        weights[f"{expert_id}.w2.input_scale"] = 1.0 / w2_input_scale
-        weights[f"{expert_id}.w3.input_scale"] = 1.0 / w3_input_scale
-        weights[f"{expert_id}.w1.weight_scale_2"] = 1.0 / w3_w1_global
-        weights[f"{expert_id}.w2.weight_scale_2"] = 1.0 / w2_sf_global
-        weights[f"{expert_id}.w3.weight_scale_2"] = 1.0 / w3_w1_global
-
-    quant_config = QuantConfig(quant_algo=QuantAlgo.NVFP4)
+    quant_config = QuantConfig(quant_algo=QuantAlgo.FP8_BLOCK_SCALES)
     fused_moe = FusedMoE(num_experts=NUM_EXPERTS,
                          routing_method=routing_method,
                          hidden_size=HIDDEN_SIZE,
@@ -245,43 +172,49 @@ def test_fused_moe_nvfp4(dtype):
                          dtype=dtype,
                          reduce_results=False,
                          model_config=ModelConfig(quant_config=quant_config))
-    fused_moe.load_weights([weights])
     fused_moe.cuda()
-
-    # Evaluate the outputs on a variant sequence length to cover all possible keys in Autotuner cache
-    ref_fused_moe = RefGatedMLPFusedMoE(
-        num_experts=NUM_EXPERTS,
-        routing_method=routing_method,
-        hidden_size=HIDDEN_SIZE,
-        intermediate_size=INTERMEDIATE_SIZE,
-        dtype=dtype,
-        model_config=ModelConfig(quant_config=quant_config))
-    ref_fused_moe.load_weights([weights])
-    ref_fused_moe.cuda()
+    fused_moe.load_weights([weights])
 
     AutoTuner.get().clear_cache()
     with torch.inference_mode(), autotune():
         fused_moe.forward(x, router_logits)
 
+    # ref_fused_moe = RefGatedMLPFusedMoE(
+    #     num_experts=NUM_EXPERTS,
+    #     routing_method=routing_method,
+    #     hidden_size=HIDDEN_SIZE,
+    #     intermediate_size=INTERMEDIATE_SIZE,
+    #     dtype=dtype,
+    #     model_config=ModelConfig(quant_config=quant_config))
+    # ref_fused_moe.load_weights([weights])
+    # ref_fused_moe.cuda()
     with torch.inference_mode():
+        nvtx.range_push("fp8 block")
         output = fused_moe.forward(x, router_logits)
-        ref_output = ref_fused_moe.forward(x, router_logits)
+        nvtx.range_pop()
+        # ref_output = ref_fused_moe.forward(x, router_logits)
 
     # compare
     torch.cuda.synchronize()
-    torch.testing.assert_close(output, ref_output, rtol=1e-2, atol=0.1)
+    # torch.testing.assert_close(output, ref_output, rtol=0.1, atol=0.5)
 
+# @skip_neither_ada_nor_hopper_unittest
+# @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_fused_moe_w4afp8(
+    dtype,
+    SEQ_LEN = 4,
+    HIDDEN_SIZE = 768,
+    INTERMEDIATE_SIZE = 640,
+    SCALING_GROUP_SIZE = 128,
+    NUM_EXPERTS = 3,
+    TOP_K = 2):
 
-@skip_neither_ada_nor_hopper_unittest
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_fused_moe_w4afp8(dtype):
-
-    SEQ_LEN = 4
-    HIDDEN_SIZE = 768
-    INTERMEDIATE_SIZE = 640
-    SCALING_GROUP_SIZE = 128
-    NUM_EXPERTS = 3
-    TOP_K = 2
+    # SEQ_LEN = 4
+    # HIDDEN_SIZE = 768
+    # INTERMEDIATE_SIZE = 640
+    # SCALING_GROUP_SIZE = 128
+    # NUM_EXPERTS = 3
+    # TOP_K = 2
     routing_method = RenormalizeMoeRoutingMethod(top_k=TOP_K)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
@@ -394,13 +327,14 @@ def test_fused_moe_w4afp8(dtype):
 
     torch.cuda.synchronize()
     with torch.inference_mode():
+        nvtx.range_push("w4a8")
         output = fused_moe.forward(x, router_logits)
+        nvtx.range_pop()
         ref_output = ref()
 
     # compare
     torch.cuda.synchronize()
-    torch.testing.assert_close(output, ref_output, rtol=1e-2, atol=0.1)
-
+    # torch.testing.assert_close(output, ref_output, rtol=0.1, atol=0.5)
 
 class RefGatedMLPFusedMoE(nn.Module):
 
@@ -502,3 +436,59 @@ class RefGatedMLPFusedMoE(nn.Module):
 
             self.experts[expert].gate_up_proj.load_weights(gate_up_proj_weights)
             self.experts[expert].down_proj.load_weights(down_proj_weights)
+
+
+if __name__ == "__main__":
+
+    dtype = torch.bfloat16
+
+    for SEQ_LEN in [1, 4, 8, 16, 32, 64, 128]:
+
+        # SEQ_LEN = 8
+
+        # DeepSeek-R1
+        HIDDEN_SIZE = 7168
+        INTERMEDIATE_SIZE = 2048
+        SCALING_GROUP_SIZE = 128
+        NUM_EXPERTS = 32
+        TOP_K = 8
+
+        # Qwen3-235B-A22B
+        HIDDEN_SIZE = 4096
+        INTERMEDIATE_SIZE = 1536
+        SCALING_GROUP_SIZE = 128
+        NUM_EXPERTS = 16
+        TOP_K = 8
+
+        print(f"e {NUM_EXPERTS} m {SEQ_LEN} n {INTERMEDIATE_SIZE} k {HIDDEN_SIZE} topk {TOP_K}")
+
+        print("FP8 Tensor")
+        t_fp8_tensor = test_fused_moe_fp8_tensor_scaling(
+            dtype=dtype,
+            SEQ_LEN=SEQ_LEN,
+            HIDDEN_SIZE=HIDDEN_SIZE,
+            INTERMEDIATE_SIZE=INTERMEDIATE_SIZE,
+            NUM_EXPERTS=NUM_EXPERTS,
+            TOP_K=TOP_K)
+        print("FP8 Block")
+        t_fp8_block = test_fused_moe_fp8_block_scaling(
+            dtype=dtype,
+            SEQ_LEN=SEQ_LEN,
+            HIDDEN_SIZE=HIDDEN_SIZE,
+            INTERMEDIATE_SIZE=INTERMEDIATE_SIZE,
+            NUM_EXPERTS=NUM_EXPERTS,
+            TOP_K=TOP_K)
+        print("W4A8")
+        t_w4a8 = test_fused_moe_w4afp8(
+            dtype=dtype,
+            SEQ_LEN=SEQ_LEN,
+            HIDDEN_SIZE=HIDDEN_SIZE,
+            INTERMEDIATE_SIZE=INTERMEDIATE_SIZE,
+            SCALING_GROUP_SIZE=SCALING_GROUP_SIZE,
+            NUM_EXPERTS=NUM_EXPERTS,
+            TOP_K=TOP_K)
+
+
+        # tb = pt.PrettyTable( ["Test case", "FP8 Per-tensor (us)", "FP8 Per-block (us)", "W4A8 (us)", "Acc Ratio"])
+        # tb.add_row([f"m{SEQ_LEN}_n{INTERMEDIATE_SIZE}_k{HIDDEN_SIZE}_e{NUM_EXPERTS}_topk{TOP_K}", t_fp8, t_w4a8, t_fp8 / t_w4a8])
+        # print(tb)

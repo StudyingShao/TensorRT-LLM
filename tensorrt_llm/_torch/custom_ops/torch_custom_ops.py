@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 import torch
+import torch.cuda.nvtx as nvtx
 
 import tensorrt_llm.quantization.utils.fp4_utils as fp4_utils
 
@@ -158,6 +159,7 @@ def fused_moe(
         use_w4a8_group_scaling=use_w4a8_group_scaling,
     )
 
+    nvtx.range_push("profiler gemm1")
     _, gemm_tactic_1 = tuner.choose_one(
         "trtllm::fused_moe::gemm1",
         [moe_runner],
@@ -165,7 +167,8 @@ def fused_moe(
         [input, fc2_expert_weights, min_latency_tensor],
         gemm_idx=1,
     )
-
+    nvtx.range_pop()
+    nvtx.range_push("profiler gemm2")
     _, gemm_tactic_2 = tuner.choose_one(
         "trtllm::fused_moe::gemm2",
         [moe_runner],
@@ -173,6 +176,7 @@ def fused_moe(
         [input, fc2_expert_weights, min_latency_tensor],
         gemm_idx=2,
     )
+    nvtx.range_pop()
 
     run_moe = moe_runner._fused_moe_runner.run_moe_min_latency if min_latency_mode else moe_runner._fused_moe_runner.run_moe
     output = run_moe(
@@ -192,6 +196,65 @@ def fused_moe(
         min_latency_mode,
         [gemm_tactic_1, gemm_tactic_2],
     )
+
+    if True:
+
+        warmup = 20
+        run = 100
+
+        # create CUDA event
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        for _ in range(warmup):
+            run_moe(
+                input,
+                token_selected_experts,
+                token_final_scales,
+                fc1_expert_weights,
+                fc2_expert_weights,
+                quant_scales,
+                input_sf,
+                tp_size,
+                tp_rank,
+                ep_size,
+                ep_rank,
+                cluster_size,
+                cluster_rank,
+                min_latency_mode,
+                [gemm_tactic_1, gemm_tactic_2],
+            )
+
+        start_event.record()
+
+        for _ in range(run):
+            nvtx.range_push("run_moe")
+            run_moe(
+                input,
+                token_selected_experts,
+                token_final_scales,
+                fc1_expert_weights,
+                fc2_expert_weights,
+                quant_scales,
+                input_sf,
+                tp_size,
+                tp_rank,
+                ep_size,
+                ep_rank,
+                cluster_size,
+                cluster_rank,
+                min_latency_mode,
+                [gemm_tactic_1, gemm_tactic_2],
+            )
+            nvtx.range_pop()
+
+        end_event.record()
+        torch.cuda.synchronize()
+        elapsed_time = start_event.elapsed_time(end_event)
+        print(f"min_latency_mode {min_latency_mode}  Elapsed Time: {elapsed_time / run * 1000} us")
+        # return elapsed_time / run * 1000
+
+        return [output]
 
     return output if min_latency_mode else [output]
 
