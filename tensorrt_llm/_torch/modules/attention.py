@@ -24,6 +24,12 @@ from .multi_stream_utils import maybe_execute_in_parallel
 from .rms_norm import RMSNorm
 from .rotary_embedding import RotaryEmbedding
 
+def jiangs_good_tensor(tensor):
+    if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+        return "jiangs bad"
+    else:
+        return ""
+
 
 class Attention(nn.Module):
 
@@ -362,8 +368,46 @@ def fp8_block_scaling_bmm_out(
     if sm_version == 90 or sm_version == 89:
         mat1_fp8, mat1_scale = torch.ops.trtllm.fp8_batched_quantize_1x128_permute102(
             mat1)
+        
+        ############################################################################
+        # mat1_fp8.fill_(0.0)
+        # mat2_fp8.fill_(1.0)
+        # mat1_scale.fill_(1.0)
+        # mat2_scale.fill_(1.0)
+
+        mat1_scale_aligned = mat1_scale[:,:mat1_fp8.shape[1],:].repeat_interleave(128, dim=2)
+        mat2_scale_aligned = mat2_scale.repeat_interleave(128, dim=1).repeat_interleave(128, dim=2)
+
+        mat1_fp32 = mat1_fp8.to(torch.float32) * mat1_scale_aligned
+        mat2_fp32 = mat2_fp8.to(torch.float32) * mat2_scale_aligned
+
+        # print(f"mat1_fp8 {mat1_fp8.shape} {mat1_fp8}")
+        # print(f"mat2_fp8 {mat2_fp8.shape} {mat2_fp8}")
+        # print(f"mat1_scale {mat1_scale.shape} {mat1_scale}")
+        # print(f"mat2_scale {mat2_scale.shape} {mat2_scale}")
+        # print(f"mat1_scale_aligned {mat1_scale_aligned.shape} {mat1_scale_aligned}")
+        # print(f"mat2_scale_aligned {mat2_scale_aligned.shape} {mat2_scale_aligned}")
+        # print(f"mat1_fp32 {mat1_fp32.shape} {mat1_fp32}")
+        # print(f"mat2_fp32 {mat2_fp32.shape} {mat2_fp32}")
+
+        mat2_fp32 = mat2_fp32.transpose(1, 2)
+        # print(f"mat1 {mat1.shape} mat2_fp32 {mat2_fp32.shape}")
+        out_ref = torch.bmm(mat1_fp32, mat2_fp32)
+        ############################################################################
+
+
+        # jiangs fix
+        output = out.new_empty(out.shape, dtype=out.dtype, device=out.device)
+
+
         torch.ops.trtllm.fp8_block_scaling_bmm_out(mat1_fp8, mat2_fp8,
-                                                   mat1_scale, mat2_scale, out)
+                                                   mat1_scale, mat2_scale, output)
+
+        print(f"out_ref {out_ref.shape} {out_ref}")
+        print(f"out {out.shape} {output}")
+
+        out.copy_(output)
+
     elif sm_version == 100:
         low_latency = True
         use_deep_seek_fp8 = True
@@ -722,8 +766,14 @@ class MLA(nn.Module):
     def create_output(self, hidden_states: torch.Tensor):
         num_tokens = hidden_states.shape[0]
         hidden_size = self.o_proj.in_features
-        return hidden_states.new_empty([num_tokens, hidden_size],
-                                       dtype=hidden_states.dtype)
+        # return hidden_states.new_empty([num_tokens, hidden_size],
+        #                                dtype=hidden_states.dtype)
+
+        jiangs_tensor = torch.zeros([num_tokens, hidden_size],
+                                     dtype=hidden_states.dtype,
+                                     device=hidden_states.device)
+        
+        return jiangs_tensor
 
     def forward_impl(self,
                      position_ids: Optional[torch.Tensor],
@@ -777,7 +827,13 @@ class MLA(nn.Module):
         assert q.shape[
             0] == num_tokens, f"Expect q.shape[0] to be {num_tokens}, but got {q.shape[0]}"
 
+        # print(f"q {q} {jiangs_good_tensor(q)}")
+        # print(f"compressed_kv {compressed_kv} {jiangs_good_tensor(compressed_kv)}")
+
         if num_contexts > 0:
+
+            # print(f"forward_context")
+
             q_ctx = q[:num_ctx_tokens, ...]
             compressed_kv_ctx = compressed_kv[:num_ctx_tokens, ...]
             k_pe_ctx = k_pe[:num_ctx_tokens, ...]
@@ -799,6 +855,9 @@ class MLA(nn.Module):
             attn_output_context = None
 
         if num_generations > 0:
+
+            # print(f"forward_generation")
+
             q_gen = q[num_ctx_tokens:, ...]
             compressed_kv_gen = compressed_kv[num_ctx_tokens:, ...]
             k_pe_gen = k_pe[num_ctx_tokens:, ...]
@@ -831,12 +890,24 @@ class MLA(nn.Module):
         assert (
             len(attn_output_gen.shape) == 2
         ), f"attn_output_gen must be rank 2, not {len(attn_output_gen.shape)}"
+
+        # print(f"jiangs 000 output {output}")
+
         output = output if output is not None else torch.empty(
             (num_tokens, attn_output_context.shape[1]),
             dtype=attn_output_context.dtype,
             device=attn_output_context.device)
+        
+        # print(f"jiangs 111 output {output}")
+
         output[:attn_output_context.shape[0], :] = attn_output_context
         output[attn_output_context.shape[0]:, :] = attn_output_gen
+
+        # print(f"jiangs 222 output {output}")
+        # print(f"jiangs 222 attn_output_context {attn_output_context}")
+        # print(f"jiangs 222 attn_output_gen {attn_output_gen}")
+
+
         attn_output_context = None
         attn_output_gen = None
         return output
@@ -1180,6 +1251,19 @@ class MLA(nn.Module):
             device=q.device,
         )
 
+        # fused_q = torch.zeros(
+        #     [
+        #         num_tokens, self.num_heads,
+        #         (self.kv_lora_rank + self.qk_rope_head_dim)
+        #     ],
+        #     dtype=q.dtype,
+        #     device=q.device,
+        # )
+        
+        # print self.kv_lora_rank and self.qk_rope_head_dim for me
+        print(f"self.kv_lora_rank {self.kv_lora_rank} self.qk_rope_head_dim {self.qk_rope_head_dim}")
+        print(f"before fused_q {jiangs_good_tensor(fused_q)} {fused_q.shape} {fused_q}")
+
         if self.k_b_proj_trans.dtype == torch.bfloat16:
             # [num_heads, num_tokens, self.qk_nope_head_dim]
             q_nope_t = q_nope.transpose(0, 1)
@@ -1202,6 +1286,9 @@ class MLA(nn.Module):
             raise NotImplementedError(
                 f"Missing bmm impl for dtype: {self.k_b_proj_trans.dtype}.")
 
+        print(f"after fused_q {jiangs_good_tensor(fused_q)} {fused_q.shape} {fused_q}")
+
+
         if self.apply_rotary_emb:
             fused_q[..., self.kv_lora_rank:] = q_pe
         fused_q = fused_q.view([
@@ -1211,6 +1298,8 @@ class MLA(nn.Module):
 
         # out_scale = getattr(self.o_proj, "inv_input_scale", None)
         out_scale = None  # Although we use FP8 MLA for generation phase, the output is still in BF16
+
+        # print(f"self.mqa {self.mqa}")
 
         attn_out_latent = self.mqa.forward(
             fused_q,
@@ -1239,6 +1328,9 @@ class MLA(nn.Module):
 
         attn_output = output.view([num_tokens, self.num_heads, self.v_head_dim])
 
+        print(f"attn_out_latent {attn_out_latent} {jiangs_good_tensor(attn_out_latent)}")
+        # print(f"original output {output} {jiangs_good_tensor(output)}")
+
         if self.v_b_proj.dtype == torch.bfloat16:
             # [num_heads, seq, kv_lora_rank] x [num_heads, kv_lora_rank, v_head_dim]
             # -> [num_heads, seq, v_head_dim]
@@ -1252,6 +1344,8 @@ class MLA(nn.Module):
         else:
             raise NotImplementedError(
                 f"Missing bmm impl for dtype: {self.v_b_proj.dtype}.")
+
+        # print(f"MLA output {output} {jiangs_good_tensor(output)}")
 
         return output
 
@@ -1273,6 +1367,13 @@ class MLA(nn.Module):
                               hidden_states,
                               attn_metadata,
                               output=attn_output)
+        # jiangs todo
+
+        # print(f"before o_proj attn_output {attn_output} {jiangs_good_tensor(attn_output)}")
+
         attn_output = self.o_proj(attn_output,
                                   all_reduce_params=all_reduce_params)
+        
+        # print(f"after o_proj attn_output {attn_output} {jiangs_good_tensor(attn_output)}")
+
         return attn_output

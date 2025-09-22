@@ -1793,6 +1793,8 @@ void strided_batch_gemm_dispatch_sm89(__nv_fp8_e4m3* mat_a, int ld_a, int stride
     uint32_t num_problems, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, cudaStream_t stream,
     int num_device_sms = kNumDeviceSMs)
 {
+    printf("ld_a: %d, stride_a: %d\nld_b: %d, stride_b: %d\nld_d: %d, stride_d: %d\nstride_scales_a: %d\nnum_problems: %d, shape_m: %d, shape_n: %d, shape_k: %d\n",
+        ld_a, stride_a, ld_b, stride_b, ld_d, stride_d, stride_scales_a, num_problems, shape_m, shape_n, shape_k);
 
     if (num_device_sms < 0)
     {

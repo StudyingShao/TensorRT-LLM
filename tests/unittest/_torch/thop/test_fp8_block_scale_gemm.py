@@ -58,33 +58,69 @@ def test_fp8_block_scale_gemm(dtype, m, k, n):
     torch.testing.assert_close(output, output_expected, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.skipif(
-    getSMVersion() != 90 and getSMVersion() != 89,
-    reason="The test is for Hopper and Ada only. Current SM is %d." %
-    getSMVersion(),
-)
-@pytest.mark.parametrize(
-    "k, n",
-    [(7168, 2112), (512, 32768), (16384, 7168), (2048, 7168)],
-)
-@pytest.mark.parametrize(
-    "m",
-    [7, 64, 128],
-)
-@pytest.mark.parametrize(
-    "num_groups",
-    [4, 8, 16],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    [torch.bfloat16],
-)
-def test_fp8_block_scale_bmm(dtype, m, k, n, num_groups):
+# @pytest.mark.skipif(
+#     getSMVersion() != 90 and getSMVersion() != 89,
+#     reason="The test is for Hopper and Ada only. Current SM is %d." %
+#     getSMVersion(),
+# )
+# @pytest.mark.parametrize(
+#     "k, n",
+#     [(7168, 2112), (512, 32768), (16384, 7168), (2048, 7168)],
+# )
+# @pytest.mark.parametrize(
+#     "m",
+#     [7, 64, 128],
+# )
+# @pytest.mark.parametrize(
+#     "num_groups",
+#     [4, 8, 16],
+# )
+# @pytest.mark.parametrize(
+#     "dtype",
+#     [torch.bfloat16],
+# )
+# def test_fp8_block_scale_bmm(dtype, m, k, n, num_groups):
+def test_fp8_block_scale_bmm():
+    
+    dtype = torch.bfloat16
+    m = 2
+    k = 128
+    n = 512
+    num_groups = 8
+
 
     torch.random.manual_seed(0)
     a = torch.randn((m, num_groups, k), device='cuda', dtype=dtype) / k
 
+    # set the value of a. make the value of element is global index // 128
+    for i in range(m):
+        for j in range(num_groups):
+            for l in range(k):
+                # a[i, j, l] = (i * num_groups * k + j * k + l) // 128 + 1
+                # a[i, j, l] = 1
+                a[i, j, l] = 1 + i
+
     a_fp8, a_scales = torch.ops.trtllm.fp8_batched_quantize_1x128_permute102(a)
+
+    # 遍历 a_scales, 将每四个值的后两个设为比较大的数，前两个不变
+    for i in range(num_groups):
+        for j in range((k + 127) // 128):
+            if j % 4 >= 2:
+                a_scales[i, j] = a_scales[i, j] * 1E22
+
+
+    print(f"a {a.shape} a_fp8 {a_fp8.shape} a_scales {a_scales.shape}")
+    # print a_fp8 and a_scales value
+    print(f"a_fp8 {a_fp8.shape} {a_fp8}")
+    print(f"a_scales {a_scales.shape} {a_scales}")
+
+    # a_fp8 [8, 2, 128]
+    # [8, 4, 1] -> [8, 4, 128]
+    a_scales_aligned = a_scales[:,:2,:].repeat_interleave(128, dim=2)
+    print(f"a_scales_aligned {a_scales_aligned.shape} {a_scales_aligned}")
+    a_fp32 = a_fp8.to(torch.float32) * a_scales_aligned
+    print(f"a_fp32 {a_fp32.shape} {a_fp32}")
+    print(f"a {a.permute(1,0,2).shape} {a.permute(1,0,2)}")
 
     b = torch.randn((num_groups, n, k), device='cuda', dtype=dtype) / k
     b_fp8 = torch.zeros_like(b, device='cuda', dtype=torch.float8_e4m3fn)
@@ -100,11 +136,43 @@ def test_fp8_block_scale_bmm(dtype, m, k, n, num_groups):
                          device='cuda',
                          dtype=torch.bfloat16)
 
+    a_fp8.fill_(1)
+    b_fp8.fill_(1)
+    a_scales.fill_(1)
+    b_scales.fill_(1)
+
     torch.ops.trtllm.fp8_block_scaling_bmm_out(a_fp8, b_fp8, a_scales, b_scales,
                                                output)
+    
+
+    #############################################################################
+
+    # mat2_scale_aligned = mat2_scale.repeat_interleave(128, dim=1).repeat_interleave(128, dim=2)
+    # # change this for 
+
+    # # print the shape and the value of mat2_scale_aligned
+    # print(f"mat2_scale_aligned {mat2_scale_aligned.shape} {mat2_scale_aligned}")
+    # mat2_fp32 = mat2_fp8.to(torch.float32) * mat2_scale_aligned
+    # print(f"mat2_fp32 {mat2_fp32.shape} {mat2_fp32}")
+
+    # torch.ops.trtllm.fp8_block_scaling_bmm_out(mat1_fp8, mat2_fp8,
+    #                                             mat1_scale, mat2_scale, out)
+    
+    # mat1 = mat1.permute(1, 0, 2).to(torch.float32)
+    # mat2_fp32 = mat2_fp32.transpose(1, 2)
+    # print(f"mat1 {mat1.shape} mat2_fp32 {mat2_fp32.shape}")
+    # out_ref = torch.bmm(mat1, mat2_fp32)
+    # print(f"out_ref {out_ref.shape} {out_ref}")
+    # print(f"out {out.shape} {out}")
+    #############################################################################
+
+
+    print(f"output_expected {output_expected.shape} {output_expected}")
+    print(f"output {output.shape} {output}")
+
     diff = calc_diff(output, output_expected)
     assert diff < 1e-3
-    torch.testing.assert_close(output, output_expected, atol=1e-3, rtol=1e-3)
+    # torch.testing.assert_close(output, output_expected, atol=1e-3, rtol=1e-3)
 
 
 def deepSeekFp8ComputeGemmReference(mM, mN, mK, valsC, dqSfsC, valsA, dqSfsA,

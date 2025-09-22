@@ -44,6 +44,13 @@ CUTLASS_GLOBAL void sm89_fp8_bmm_1d1d_impl(uint32_t shape_m, uint32_t shape_n, u
         = reinterpret_cast<typename GemmKernel::ElementBlockScale const*>(scales_b + blockIdx.z * stride_scales_b);
     auto ptr_output = reinterpret_cast<typename GemmKernel::ElementOutput*>(D + blockIdx.z * stride_d);
 
+    // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0)
+    // {
+    //     printf("shape_m: %u, shape_n: %u, shape_k: %u\n", shape_m, shape_n, shape_k);
+    //     printf("stride_a: %lu, stride_b: %lu, stride_d: %lu, stride_scales_a: %lu, stride_scales_b: %lu\n",
+    //         stride_a, stride_b, stride_d, stride_scales_a, stride_scales_b);
+    // }
+
     op(ptr_a, ptr_b, ptr_scale_a, ptr_scale_b, ptr_output, shape_m, shape_n, shape_k);
 }
 
@@ -140,6 +147,8 @@ struct AdaBlockwiseGemmKernel
         __syncthreads();
 
         // copy rf -> gmem
+
+        // jiangs TODO change stride to ldd
         auto mO = cute::make_tensor(cute::make_gmem_ptr(o), cute::make_shape(M, N), cute::make_stride(N, cute::_1{}));
         auto cta_coord = cute::make_coord(blockIdx.x, blockIdx.y, cute::_);
         auto gO = cute::local_tile(mO, typename KT::TileShape{}, cta_coord, cute::Step<cute::_1, cute::_1, X>{});
@@ -198,6 +207,55 @@ struct AdaBlockwiseGemmKernel
     {
         // Dynamic shared memory base pointer
         extern __shared__ int SharedStorageBase[];
+
+        // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z ==0 && threadIdx.x ==0)
+        // {
+        //     printf("typename KT::TileShape{}: ");
+        //     print(typename KT::TileShape{});
+        //     printf("\n");
+        //     printf("typename KT::ScalePerTileShape{}: ");
+        //     print(typename KT::ScalePerTileShape{});
+        //     printf("\n");
+        //     printf("typename KT::SmemLayoutA{}: ");
+        //     print(typename KT::SmemLayoutA{});
+        //     printf("\n");
+        //     printf("typename KT::SmemLayoutB{}: ");
+        //     print(typename KT::SmemLayoutB{});
+        //     printf("\n");
+        //     printf("typename KT::SmemLayoutSFA{}: ");
+        //     print(typename KT::SmemLayoutSFA{});
+        //     printf("\n");
+        //     printf("typename KT::SmemLayoutSFB{}: ");
+        //     print(typename KT::SmemLayoutSFB{});
+        //     printf("\n");
+        //     printf("typename KT::SmemLayoutO{}: ");
+        //     print(typename KT::SmemLayoutO{});
+        //     printf("\n");
+        // }
+
+        // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z ==0 && threadIdx.x ==0)
+        // {
+        //     for (size_t i = 0; i < 10 && i < M; i++)
+        //     {
+        //         printf("mat A: \n");
+        //         for (size_t j = 0; j < 10; j++)
+        //         {
+        //             printf("%f ", float(ptr_a[i * K + j]));
+        //         }
+        //         printf("\n");
+        //     }
+        //     printf("\n");
+        //     for (size_t i = 0; i < 4; i++)
+        //     {
+        //         printf("mat B: \n");
+        //         for (size_t j = 0; j < 10; j++)
+        //         {
+        //             printf("%f ", float(ptr_b[i * K + j]));
+        //         }
+        //         printf("\n");
+        //     }
+        //     printf("\n");
+        // }
 
         auto [gA, gB, gSFA, gSFB, sA, sB, sSFA, sSFB]
             = gmem_tensor_init(ptr_a, ptr_b, ptr_scale_a, ptr_scale_b, M, N, K, SharedStorageBase);
@@ -263,6 +321,7 @@ struct AdaBlockwiseGemmKernel
         cute::clear(tAsA);
         cute::clear(tBsB);
         cute::clear(tAsSFA);
+        cute::clear(tBsSFB);
 
         int k_tile_count = cute::size<2>(gA);
         CUTLASS_PRAGMA_NO_UNROLL
@@ -339,6 +398,22 @@ struct AdaBlockwiseGemmKernel
         cute::copy(s2r_copy_SFB, tXsSFB_read, tXrSFB);
         cute::copy(s2r_copy_A, tXsA_read, tXrA);
         cute::copy(s2r_copy_B, tXsB_read(cute::_, cute::Int<0>{}, cute::_), tXrB(cute::_, cute::_, cute::Int<0>{}));
+
+        // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z ==0 && threadIdx.x ==0)
+        // {
+        //     printf("tCrA: ");
+        //     print(tCrA.layout());
+        //     printf("\n");
+        //     printf("tCrB: ");
+        //     print(tCrB.layout());
+        //     printf("\n");
+        //     printf("accum: ");
+        //     print(accum.layout());
+        //     printf("\n");
+        //     printf("temp: ");
+        //     print(temp.layout());
+        //     printf("\n");
+        // }
 
         cute::clear(accum);
         int k_tile_iter = KT::Stages - 1;

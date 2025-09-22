@@ -706,7 +706,7 @@ class WInt4AFP8FusedMoEMethod(FusedMoEMethodBase):
             unpacker = torch.ops.trtllm.unpack_int4_packed_tensor_to_int8
 
             w2_weight_shard = packer(
-                unpacker(w2_weight_shard.cpu()).T.contiguous()).to(
+                unpacker(w2_weight_shard.cpu().contiguous()).T.contiguous()).to(
                     w2_weight_shard.device)
             w2_weight_shard = preprocessor(w2_weight_shard, torch.quint4x2,
                                            torch.float8_e4m3fn,

@@ -69,6 +69,12 @@ from .modeling_utils import (DecoderModel, DecoderModelForCausalLM,
                              register_auto_model)
 
 
+def jiangs_good_tensor(tensor):
+    if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+        return "jiangs bad"
+    else:
+        return ""
+
 @triton.jit
 def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
     """
@@ -745,6 +751,12 @@ class DeepseekV3DecoderLayer(DecoderLayer):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         # Self Attention
+
+        # import traceback
+        # traceback.print_stack()
+
+        print(f"before attn {hidden_states} {jiangs_good_tensor(hidden_states)}")
+
         hidden_states = self.self_attn(
             position_ids=position_ids,
             hidden_states=hidden_states,
@@ -754,18 +766,25 @@ class DeepseekV3DecoderLayer(DecoderLayer):
             **kwargs,
         )
 
+        print(f"after attn {hidden_states} {jiangs_good_tensor(hidden_states)}")
+
+        output = None
         if isinstance(self.mlp, Deepseekv3MoE):
-            return self.forward_MoE(
+            output = self.forward_MoE(
                 hidden_states=hidden_states,
                 attn_metadata=attn_metadata,
                 residual=residual,
             )
         else:
             assert isinstance(self.mlp, GatedMLP)
-            return self.forward_mlp(
+            output = self.forward_mlp(
                 hidden_states=hidden_states,
                 residual=residual,
             )
+        
+        print(f"after moe {output} {jiangs_good_tensor(output[0])} {jiangs_good_tensor(output[1])}")
+
+        return output
 
     def forward_MoE(
         self,
@@ -1048,6 +1067,8 @@ class DeepseekV3Model(DecoderModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
+        # print(f"inputs_embeds {inputs_embeds} {jiangs_good_tensor(inputs_embeds)}")
+
         hidden_states = inputs_embeds
         residual = None
 
@@ -1132,6 +1153,8 @@ class DeepseekV3ForCausalLM(DecoderModelForCausalLM[DeepseekV3Model,
             inputs_embeds=inputs_embeds,
         )
 
+        # print(f"final hidden_states {hidden_states} {jiangs_good_tensor(hidden_states)}")
+
         if spec_metadata and spec_metadata.spec_dec_mode.is_mtp():
             # get logits
             logits = self.logits_processor.forward(
@@ -1158,6 +1181,9 @@ class DeepseekV3ForCausalLM(DecoderModelForCausalLM[DeepseekV3Model,
                 attn_metadata,
                 return_context_logits,
             )
+
+            print(f"logits {jiangs_good_tensor(logits)} {logits.shape} {logits}")
+
             return logits
 
     def load_weights(self, weights: Dict):
